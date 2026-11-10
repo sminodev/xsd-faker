@@ -1,0 +1,67 @@
+{
+  "version": "1.0",
+  "created": "2026-01-15T12:00:00Z",
+  "channel": "web",
+  "Title": "Testbestellung",
+  "CustomerRef": "CUS-061959",
+  "Express": true,
+  "Level": 1,
+  "Pickup": true,
+  "Wanted": "1996-10",
+  "Packages": 37,
+  "Note": {
+    "value": "Gwedehotbx <b xmlns=\"urn:example:common\">Xvbejla</b><i xmlns=\"urn:example:common\">Ysrij</i>"
+  },
+  "DiscountCode": "Qi",
+  "DiscountPercent": 92.2,
+  "Contact": {
+    "Name": "Testperson Beispiel",
+    "Email": "sample5479@example.invalid",
+    "Phone": "Qxyvpz"
+  },
+  "Line": [
+    {
+      "Item": "Stifte",
+      "Quantity": 6,
+      "Price": {
+        "currency": "EUR",
+        "value": 724
+      },
+      "Tag": [
+        "Lqtoigaay",
+        "Szhzqu"
+      ],
+      "Packaging": {
+        "Box": "L",
+        "Weight": 506.94
+      }
+    },
+    {
+      "Item": "Papier",
+      "Quantity": 211,
+      "Price": {
+        "currency": "EUR",
+        "value": 735.92
+      },
+      "Tag": [
+        "Mfpuweomne",
+        "E"
+      ],
+      "Packaging": {
+        "Box": "S",
+        "Weight": 60.13
+      }
+    }
+  ],
+  "Attachment": "XMq1zIc=",
+  "Extensions": {
+    "Note": [
+      {
+        "value": "Ucgvvu <b xmlns=\"urn:example:common\">Mvkz</b><i xmlns=\"urn:example:common\">Woz</i>"
+      },
+      {
+        "value": "Oreskpwjhc <b xmlns=\"urn:example:common\">Bsy</b><i xmlns=\"urn:example:common\">Hnkstqsqph</i>"
+      }
+    ]
+  }
+}

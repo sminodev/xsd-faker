@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns="urn:example:logistics" targetNamespace="urn:example:logistics" elementFormDefault="qualified">
+  <xs:annotation><xs:documentation>A synthetic shipment, not a carrier integration format.</xs:documentation></xs:annotation>
+  <xs:element name="Shipment"><xs:complexType><xs:sequence>
+    <xs:element name="ShipmentNumber"><xs:simpleType><xs:restriction base="xs:string"><xs:pattern value="SHP-[0-9]{6}"/></xs:restriction></xs:simpleType></xs:element>
+    <xs:element name="Carrier" type="xs:string"/>
+    <xs:element name="Recipient"><xs:complexType><xs:sequence>
+      <xs:element name="Name" type="xs:string"/><xs:element name="Street" type="xs:string"/>
+      <xs:element name="PostalCode"><xs:simpleType><xs:restriction base="xs:string"><xs:pattern value="[0-9]{5}"/></xs:restriction></xs:simpleType></xs:element>
+      <xs:element name="City" type="xs:string"/><xs:element name="Country" type="xs:string"/>
+    </xs:sequence></xs:complexType></xs:element>
+    <xs:choice><xs:element name="Road" type="xs:boolean" fixed="true"/><xs:element name="Air" type="xs:boolean" fixed="true"/></xs:choice>
+    <xs:element name="Package" minOccurs="1" maxOccurs="3"><xs:complexType><xs:sequence>
+      <xs:element name="Weight"><xs:simpleType><xs:restriction base="xs:decimal"><xs:minExclusive value="0"/><xs:maxInclusive value="50"/><xs:fractionDigits value="2"/></xs:restriction></xs:simpleType></xs:element>
+    </xs:sequence><xs:attribute name="unit" type="xs:string" fixed="kg" use="required"/></xs:complexType></xs:element>
+    <xs:element name="DeliveryDate" type="xs:date" minOccurs="0"/>
+  </xs:sequence><xs:attribute name="version" type="xs:string" fixed="1.0" use="required"/></xs:complexType></xs:element>
+</xs:schema>

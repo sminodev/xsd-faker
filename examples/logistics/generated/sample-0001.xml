@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Shipment xmlns="urn:example:logistics" version="1.0">
+  <ShipmentNumber>SHP-011705</ShipmentNumber>
+  <Carrier>Example Logistics</Carrier>
+  <Recipient>
+    <Name>Testperson Beispiel</Name>
+    <Street>Beispielweg 1</Street>
+    <PostalCode>12345</PostalCode>
+    <City>Musterstadt</City>
+    <Country>DE</Country>
+  </Recipient>
+  <Road>true</Road>
+  <Package unit="kg">
+    <Weight>34.96</Weight>
+  </Package>
+  <Package unit="kg">
+    <Weight>23.4</Weight>
+  </Package>
+  <DeliveryDate>2026-01-15</DeliveryDate>
+</Shipment>

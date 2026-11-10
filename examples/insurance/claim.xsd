@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns="urn:example:insurance" targetNamespace="urn:example:insurance" elementFormDefault="qualified">
+  <xs:annotation><xs:documentation>A synthetic claim. This is not an insurance industry standard.</xs:documentation></xs:annotation>
+  <xs:element name="Claim">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="ClaimNumber"><xs:simpleType><xs:restriction base="xs:string"><xs:pattern value="CLM-[0-9]{6}"/></xs:restriction></xs:simpleType></xs:element>
+        <xs:element name="PolicyNumber"><xs:simpleType><xs:restriction base="xs:string"><xs:pattern value="POL-[0-9]{6}"/></xs:restriction></xs:simpleType></xs:element>
+        <xs:element name="ReportedAt" type="xs:dateTime"/>
+        <xs:element name="InsuredName" type="xs:string"/>
+        <xs:element name="Email" type="xs:string" minOccurs="0"/>
+        <xs:choice>
+          <xs:element name="Damage"><xs:complexType><xs:sequence>
+            <xs:element name="Description" type="xs:string"/>
+            <xs:element name="Amount"><xs:complexType><xs:simpleContent><xs:extension base="AmountType"><xs:attribute name="currency" type="Currency" use="required"/></xs:extension></xs:simpleContent></xs:complexType></xs:element>
+          </xs:sequence></xs:complexType></xs:element>
+          <xs:element name="Assistance"><xs:simpleType><xs:restriction base="xs:string"><xs:enumeration value="repair"/><xs:enumeration value="replacement"/></xs:restriction></xs:simpleType></xs:element>
+        </xs:choice>
+        <xs:element name="Attachment" type="xs:anyURI" minOccurs="0" maxOccurs="3"/>
+      </xs:sequence>
+      <xs:attribute name="version" type="xs:string" fixed="1.0" use="required"/>
+    </xs:complexType>
+  </xs:element>
+  <xs:simpleType name="AmountType"><xs:restriction base="xs:decimal"><xs:minInclusive value="0.01"/><xs:maxInclusive value="9999.99"/><xs:fractionDigits value="2"/></xs:restriction></xs:simpleType>
+  <xs:simpleType name="Currency"><xs:restriction base="xs:string"><xs:enumeration value="EUR"/><xs:enumeration value="USD"/></xs:restriction></xs:simpleType>
+</xs:schema>

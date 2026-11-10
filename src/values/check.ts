@@ -1,0 +1,117 @@
+// Checks a value against the facets of its simple type. The generator uses it to accept or reject candidates, so it
+// has to be strict: whatever it accepts must be valid for the XML Schema too.
+
+import { type Facets, INTEGERS, isNumeric } from '../xsd/facets.js';
+import { combinePatterns, translateBody } from '../xsd/xsd-regex.js';
+import { compareDecimal } from './decimal.js';
+import { lexicalRegExp } from './lexical.js';
+
+const patternCache = new Map<string, RegExp>();
+
+/** One regular expression for the patterns of all restriction steps. */
+function patternRegExp(steps: readonly (readonly string[])[]): RegExp {
+  const key = JSON.stringify(steps);
+  let regex = patternCache.get(key);
+  if (regex === undefined) {
+    regex = new RegExp(combinePatterns(steps.map((step) => step.map((p) => translateBody(p)))), 'u');
+    patternCache.set(key, regex);
+  }
+  return regex;
+}
+
+/** The digits of a decimal number: all significant digits, and those after the point. */
+export function digitCounts(lexical: string): { total: number; fraction: number } {
+  const [whole = '', fraction = ''] = lexical.replace(/^[+-]/, '').split('.');
+  const intDigits = whole.replace(/^0+/, '');
+  const fracDigits = fraction.replace(/0+$/, '');
+  return { total: Math.max(1, intDigits.length + fracDigits.length), fraction: fracDigits.length };
+}
+
+/** The length a length facet measures: octets for binary types, characters otherwise. */
+function measuredLength(builtin: string, value: string): number {
+  if (builtin === 'hexBinary') {
+    return value.length / 2;
+  }
+  if (builtin === 'base64Binary') {
+    const padding = value.endsWith('==') ? 2 : value.endsWith('=') ? 1 : 0;
+    return (value.length / 4) * 3 - padding;
+  }
+  return [...value].length;
+}
+
+function checkLength(facets: Facets, length: number, unit: string): string | undefined {
+  if (facets.length !== undefined && length !== facets.length) {
+    return `needs ${facets.length} ${unit}, has ${length}`;
+  }
+  if (facets.minLength !== undefined && length < facets.minLength) {
+    return `needs at least ${facets.minLength} ${unit}, has ${length}`;
+  }
+  if (facets.maxLength !== undefined && length > facets.maxLength) {
+    return `allows at most ${facets.maxLength} ${unit}, has ${length}`;
+  }
+  return undefined;
+}
+
+function checkNumber(facets: Facets, value: string): string | undefined {
+  const number = Number(value);
+  if (INTEGERS[facets.builtin] !== undefined && !Number.isInteger(number)) {
+    return 'is not an integer';
+  }
+  const { min, max } = facets;
+  const lower = min ? (compareDecimal(value, min.lexical ?? String(min.value)) ?? number - min.value) : 1;
+  const upper = max ? (compareDecimal(value, max.lexical ?? String(max.value)) ?? number - max.value) : -1;
+  if (min && (min.exclusive ? lower <= 0 : lower < 0)) {
+    return `is below the lower bound ${min.value}`;
+  }
+  if (max && (max.exclusive ? upper >= 0 : upper > 0)) {
+    return `is above the upper bound ${max.value}`;
+  }
+  if (facets.builtin !== 'float' && facets.builtin !== 'double') {
+    const digits = digitCounts(value);
+    if (facets.totalDigits !== undefined && digits.total > facets.totalDigits) {
+      return `has ${digits.total} digits, more than ${facets.totalDigits}`;
+    }
+    if (facets.fractionDigits !== undefined && digits.fraction > facets.fractionDigits) {
+      return `has ${digits.fraction} fraction digits, more than ${facets.fractionDigits}`;
+    }
+  }
+  return undefined;
+}
+
+/** Why `value` is not allowed by `facets`, or undefined if it is. */
+export function checkValue(facets: Facets, value: string): string | undefined {
+  if (facets.enumeration !== undefined && !facets.enumeration.includes(value)) {
+    return 'is not one of the enumerated values';
+  }
+  if (facets.patterns.length > 0 && !patternRegExp(facets.patterns).test(value)) {
+    return 'does not match the pattern';
+  }
+  if (facets.variety === 'union') {
+    const members = facets.members ?? [];
+    return members.some((member) => checkValue(member, value) === undefined)
+      ? undefined
+      : 'matches none of the member types';
+  }
+  if (facets.variety === 'list') {
+    const items = value.trim() === '' ? [] : value.trim().split(/\s+/);
+    const length = checkLength(facets, items.length, 'items');
+    if (length) {
+      return length;
+    }
+    for (const item of items) {
+      const reason = facets.item && checkValue(facets.item, item);
+      if (reason) {
+        return `item ${item} ${reason}`;
+      }
+    }
+    return undefined;
+  }
+  const lexical = lexicalRegExp(facets.builtin);
+  if (lexical && !lexical.test(value)) {
+    return `is not a valid xs:${facets.builtin}`;
+  }
+  if (isNumeric(facets.builtin)) {
+    return checkNumber(facets, value);
+  }
+  return checkLength(facets, measuredLength(facets.builtin, value), 'characters');
+}

@@ -1,0 +1,55 @@
+{
+  "name": "xsd-faker",
+  "version": "0.2.0",
+  "description": "Generate reproducible XML and JSON test fixtures from XSD files.",
+  "type": "module",
+  "engines": {
+    "node": ">=22.12"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "build": "tsc -p tsconfig.build.json",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test:acceptance": "npm run build && node --test test/acceptance.test.mjs",
+    "verify": "npm run typecheck && npm run build && npm test && node --test test/acceptance.test.mjs",
+    "prepack": "npm run build && node -e \"require('node:fs').chmodSync('dist/bin.js', 0o755)\""
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./node": {
+      "types": "./dist/node.d.ts",
+      "import": "./dist/node.js",
+      "default": "./dist/node.js"
+    }
+  },
+  "dependencies": {
+    "@xmldom/xmldom": "^0.9.12",
+    "xmllint-wasm": "^5.3.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.5",
+    "prettier": "^3.9.10",
+    "typescript": "~6.0.3",
+    "vitest": "^5.1.0"
+  },
+  "license": "MIT",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "docs",
+    "examples",
+    "CONTRIBUTING.md",
+    "SECURITY.md"
+  ],
+  "bin": {
+    "xsd-faker": "./dist/bin.js"
+  },
+  "types": "./dist/index.d.ts"
+}

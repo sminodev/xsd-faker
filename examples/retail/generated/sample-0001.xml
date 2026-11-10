@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Order xmlns="urn:example:order" xmlns:c="urn:example:common" version="1.0" created="2026-01-15T12:00:00Z" channel="web">
+  <Title>Testbestellung</Title>
+  <CustomerRef>CUS-061959</CustomerRef>
+  <Express>true</Express>
+  <Level>1</Level>
+  <Pickup>true</Pickup>
+  <Wanted>1996-10</Wanted>
+  <Packages>37</Packages>
+  <c:Note>Gwedehotbx <c:b>Xvbejla</c:b><c:i>Ysrij</c:i></c:Note>
+  <DiscountCode>Qi</DiscountCode>
+  <DiscountPercent>92.2</DiscountPercent>
+  <Contact>
+    <c:Name>Testperson Beispiel</c:Name>
+    <c:Email>sample5479@example.invalid</c:Email>
+    <c:Phone>Qxyvpz</c:Phone>
+  </Contact>
+  <Line>
+    <Item>Stifte</Item>
+    <Quantity>6</Quantity>
+    <Price currency="EUR">724</Price>
+    <Tag>Lqtoigaay</Tag>
+    <Tag>Szhzqu</Tag>
+    <Packaging>
+      <Box>L</Box>
+      <Weight>506.94</Weight>
+    </Packaging>
+  </Line>
+  <Line>
+    <Item>Papier</Item>
+    <Quantity>211</Quantity>
+    <Price currency="EUR">735.92</Price>
+    <Tag>Mfpuweomne</Tag>
+    <Tag>E</Tag>
+    <Packaging>
+      <Box>S</Box>
+      <Weight>60.13</Weight>
+    </Packaging>
+  </Line>
+  <Attachment>XMq1zIc=</Attachment>
+  <Extensions>
+    <c:Note>Ucgvvu <c:b>Mvkz</c:b><c:i>Woz</c:i></c:Note>
+    <c:Note>Oreskpwjhc <c:b>Bsy</c:b><c:i>Hnkstqsqph</c:i></c:Note>
+  </Extensions>
+</Order>

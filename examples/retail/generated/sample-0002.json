@@ -1,0 +1,68 @@
+{
+  "version": "1.0",
+  "created": "2026-01-15T12:00:00Z",
+  "channel": "web",
+  "Title": "Testbestellung",
+  "CustomerRef": "CUS-625192",
+  "Express": false,
+  "Level": 1,
+  "DeliveryDate": "2026-01-15",
+  "DeliveryTime": "12:00:00Z",
+  "Wanted": "1993-07-07",
+  "Packages": 95,
+  "Note": {
+    "value": "O <b xmlns=\"urn:example:common\">Jnind</b><i xmlns=\"urn:example:common\">Rtqihc</i>"
+  },
+  "DiscountCode": "L",
+  "DiscountPercent": 25,
+  "Contact": {
+    "Name": "Testperson Beispiel",
+    "Email": "sample8605@example.invalid",
+    "Phone": "Cczve"
+  },
+  "Line": [
+    {
+      "Item": "Ordner",
+      "Quantity": 796,
+      "Price": {
+        "currency": "EUR",
+        "value": 30.7
+      },
+      "Tag": [
+        "Jgzxvpry",
+        "Xioh"
+      ],
+      "Packaging": {
+        "Box": "M",
+        "Weight": 518.64
+      }
+    },
+    {
+      "Item": "Ordner",
+      "Quantity": 267,
+      "Price": {
+        "currency": "EUR",
+        "value": 91
+      },
+      "Tag": [
+        "Jrdegt",
+        "Ggngcmf"
+      ],
+      "Packaging": {
+        "Box": "S",
+        "Weight": 70.77
+      }
+    }
+  ],
+  "Attachment": "Qh6yieosTdg=",
+  "Extensions": {
+    "Note": [
+      {
+        "value": "Qnu <b xmlns=\"urn:example:common\">Efblghwaap</b><i xmlns=\"urn:example:common\">Hhq</i>"
+      },
+      {
+        "value": "Akioqqxp <b xmlns=\"urn:example:common\">Hp</b><i xmlns=\"urn:example:common\">Jqeu</i>"
+      }
+    ]
+  }
+}

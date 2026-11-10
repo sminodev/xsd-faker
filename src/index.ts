@@ -1,0 +1,443 @@
+import {
+  type ChoiceStrategy,
+  choiceId,
+  firstBranch,
+  type OptionalMode,
+  preferBranches,
+  randomBranch,
+  smallestBranch,
+  Walker,
+  LimitError,
+} from './generate/walker.js';
+import { toJson, JsonMappingError, type JsonOptions, type JsonValue } from './json/serialize.js';
+import { checkOptions } from './options.js';
+import { createRng } from './rng.js';
+import { validateXml, type SchemaFiles, type XmlValidator } from './validate/xmllint.js';
+import { profileValues, valueLists, type ProfileName, type ValueLists } from './values/profiles.js';
+import { facetValues, firstOf, type ValueSource } from './values/source.js';
+import { serializeXml } from './xml/serialize.js';
+import { elements, type InstanceElement } from './xml/tree.js';
+import { type Problem, Problems } from './xsd/problems.js';
+import {
+  attr,
+  clark,
+  type Component,
+  type SchemaDocument,
+  SchemaSet,
+  type SchemaSource,
+  XS,
+} from './xsd/schema-set.js';
+export type { ChoiceContext, ChoiceStrategy, OptionalMode } from './generate/walker.js';
+export { firstBranch, randomBranch, smallestBranch, preferBranches } from './generate/walker.js';
+export { toJson, JsonMappingError } from './json/serialize.js';
+export type { JsonOptions, JsonValue } from './json/serialize.js';
+export type { ValueContext, ValueSource } from './values/source.js';
+export { facetValues, firstOf } from './values/source.js';
+export { profileValues, valueLists, PROFILE_NAMES } from './values/profiles.js';
+export type { ProfileName, ProfileOptions, ValueLists } from './values/profiles.js';
+export type { InstanceElement, InstanceNode } from './xml/tree.js';
+export { serializeXml } from './xml/serialize.js';
+export type { Problem, ProblemCode } from './xsd/problems.js';
+export type { SchemaSource } from './xsd/schema-set.js';
+export { validateXml, SchemaCompileError } from './validate/xmllint.js';
+export type { SchemaFiles, Verdict, XmlValidator } from './validate/xmllint.js';
+export interface GenerateOptions {
+  root?: string;
+  seed?: number;
+  /** Default: none. Separate settings take precedence. */
+  optional?: OptionalMode;
+  optionalElements?: OptionalMode;
+  optionalAttributes?: OptionalMode;
+  repeat?: number;
+  choice?:
+    | 'first'
+    | 'smallest'
+    | 'random'
+    | 'all'
+    | {
+        prefer: string[];
+      }
+    | ChoiceStrategy;
+  /** Optional-element expansion depth. Root depth is zero. Default: 12, and always lower than maxTotalDepth. */
+  maxDepth?: number;
+  /** Hard limit including required content. Default: 64. Exceeding it is a generation error. */
+  maxTotalDepth?: number;
+  maxNodes?: number;
+  values?: ValueSource;
+  profile?: ProfileName;
+  locale?: 'en' | 'de';
+  referenceDate?: string;
+  samples?: ValueLists;
+  /** Instance mode validates by default. Template mode never claims validity. */
+  mode?: 'instance' | 'template';
+  validate?: boolean;
+  validator?: XmlValidator;
+  attempts?: number;
+  indent?: string;
+  schemaLocation?: string;
+  /** Namespace URI -> preferred prefix. */
+  prefixes?: Readonly<Record<string, string>>;
+  json?: false | JsonOptions;
+  /** Empty values are allowed only in template mode. */
+  fillElements?: boolean;
+  fillAttributes?: boolean;
+}
+export interface GenerateInput {
+  files: SchemaSource;
+  entry: string;
+}
+export type SampleStatus = 'valid' | 'invalid' | 'incomplete' | 'unvalidated' | 'template';
+export interface Sample {
+  xml: string;
+  tree: InstanceElement;
+  json?: JsonValue;
+  jsonStatus: 'generated' | 'unavailable' | 'not-requested';
+  /** XML validation only. JSON projection is not independently JSON-Schema-validated. */
+  valid: boolean | undefined;
+  status: SampleStatus;
+  seed: number;
+  attempts: number;
+  errors: string[];
+  problems: Problem[];
+  choices: {
+    id: string;
+    branch: number;
+    branches: number;
+  }[];
+}
+export interface RootElement {
+  name: string;
+  namespace: string;
+  expandedName: string;
+  file: string;
+  abstract: boolean;
+  entryDocument: boolean;
+}
+export class GenerateError extends Error {
+  override name = 'GenerateError';
+  constructor(
+    message: string,
+    readonly problems: Problem[],
+  ) {
+    super(message);
+  }
+}
+interface Prepared {
+  set: SchemaSet;
+  doc: SchemaDocument;
+  root: Component;
+  loading: Problem[];
+  schemas: SchemaFiles;
+}
+function load(input: GenerateInput): {
+  set: SchemaSet;
+  doc: SchemaDocument;
+  problems: Problem[];
+} {
+  const problems = new Problems();
+  const set = new SchemaSet(input.files, problems);
+  const doc = set.load(input.entry);
+  if (!doc || problems.list.some((p) => p.severity === 'error')) {
+    throw new GenerateError(`cannot load schema: ${problems.list.map((p) => p.message).join('; ')}`, problems.list);
+  }
+  return { set, doc, problems: problems.list };
+}
+/** Lists declarations across the loaded schema set. Abstract roots are visible but not generated directly. */
+export function listRoots(input: GenerateInput): {
+  roots: RootElement[];
+  problems: Problem[];
+} {
+  const { set, doc, problems } = load(input);
+  const roots = [...set.components.element].map(([expandedName, component]) => ({
+    name: attr(component.node, 'name') ?? '',
+    namespace: component.doc.targetNamespace,
+    expandedName,
+    file: component.doc.path,
+    abstract: ['true', '1'].includes(attr(component.node, 'abstract') ?? ''),
+    entryDocument: component.doc === doc,
+  }));
+  return { roots, problems };
+}
+function prepare(input: GenerateInput, options: GenerateOptions): Prepared {
+  const { set, doc, problems } = load(input);
+  const choices = [...set.components.element].filter(([, c]) => c.doc === doc);
+  let id: string | undefined;
+  const requested = options.root;
+  if (requested === undefined) {
+    if (choices.length === 1) {
+      id = choices[0]?.[0];
+    }
+  } else if (requested.startsWith('{')) {
+    id = requested;
+  } else if (requested.includes(':')) {
+    const qn = set.resolveQName(doc.root, requested);
+    id = clark(qn.ns, qn.local);
+  } else {
+    id = clark(doc.targetNamespace, requested);
+  }
+  const root = id === undefined ? undefined : set.components.element.get(id);
+  if (!root) {
+    const issue: Problem = {
+      severity: 'error',
+      code: requested === undefined ? 'root-required' : 'unknown-root',
+      file: doc.path,
+      message:
+        requested === undefined
+          ? `choose a global root element; entry declarations: ${choices.map(([name]) => name).join(', ') || '(none)'}`
+          : `unknown root element "${options.root}"; use --list-roots or listRoots() to inspect available roots`,
+    };
+    throw new GenerateError(issue.message, [...problems, issue]);
+  }
+  return { set, doc, root, loading: problems, schemas: { entry: doc.path, files: set.sourceTexts } };
+}
+function strategy(choice: GenerateOptions['choice']): ChoiceStrategy {
+  if (typeof choice === 'function') {
+    return choice;
+  }
+  if (choice === 'random') {
+    return randomBranch;
+  }
+  if (choice === 'smallest') {
+    return smallestBranch;
+  }
+  if (typeof choice === 'object' && choice !== null && Array.isArray(choice.prefer)) {
+    return preferBranches(choice.prefer);
+  }
+  if (choice === undefined || choice === 'first' || choice === 'all') {
+    return firstBranch;
+  }
+  throw new TypeError('unknown choice strategy');
+}
+function prefixes(set: SchemaSet, configured: GenerateOptions['prefixes']): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const document of set.documents.values()) {
+    const attributes = document?.root.attributes;
+    for (let i = 0; attributes && i < attributes.length; i += 1) {
+      const a = attributes.item(i);
+      if (a?.prefix === 'xmlns' && a.value !== XS && !out.has(a.value)) {
+        out.set(a.value, a.localName ?? '');
+      }
+    }
+  }
+  for (const [namespace, prefix] of Object.entries(configured ?? {})) {
+    out.set(namespace, prefix);
+  }
+  return out;
+}
+function source(options: GenerateOptions): ValueSource {
+  const base =
+    options.values ??
+    (options.profile
+      ? profileValues(options.profile, {
+          ...(options.locale !== undefined ? { locale: options.locale } : {}),
+          ...(options.referenceDate !== undefined ? { referenceDate: options.referenceDate } : {}),
+        })
+      : facetValues);
+  return options.samples ? firstOf(valueLists(options.samples), base) : base;
+}
+async function generatePrepared(prepared: Prepared, options: GenerateOptions): Promise<Sample> {
+  const template = options.mode === 'template';
+  const validate = !template && (options.validate ?? true);
+  const attempts = validate ? (options.attempts ?? 10) : 1;
+  const namespacePrefixes = prefixes(prepared.set, options.prefixes);
+  const values = source(options);
+  let last: Sample | undefined;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const seed = (options.seed ?? 1) + attempt;
+    const problems = new Problems();
+    const walker = new Walker(prepared.set, problems, {
+      optional: options.optional ?? 'none',
+      ...(options.optionalElements !== undefined ? { optionalElements: options.optionalElements } : {}),
+      ...(options.optionalAttributes !== undefined ? { optionalAttributes: options.optionalAttributes } : {}),
+      repeat: options.repeat ?? 1,
+      choice: strategy(options.choice),
+      allBranches: options.choice === 'all',
+      maxDepth: options.maxDepth ?? Math.min(12, (options.maxTotalDepth ?? 64) - 1),
+      maxTotalDepth: options.maxTotalDepth ?? 64,
+      maxNodes: options.maxNodes ?? 10000,
+      values,
+      rng: createRng(seed),
+    });
+    let tree: InstanceElement;
+    try {
+      tree = walker.root(prepared.root);
+    } catch (error) {
+      if (error instanceof LimitError) {
+        problems.error('resource-limit', error.message);
+        throw new GenerateError(error.message, [...prepared.loading, ...problems.list]);
+      }
+      throw error;
+    }
+    if (template) {
+      problems.warning('template-only', 'template output is not an accepted test instance');
+      for (const node of elements(tree)) {
+        if (options.fillAttributes === false) {
+          for (const a of node.attributes) {
+            a.value = '';
+          }
+        }
+        if (options.fillElements === false) {
+          for (const child of node.children) {
+            if (child.kind === 'text') {
+              child.value = '';
+            }
+          }
+        }
+      }
+    }
+    const xml = serializeXml(tree, {
+      prefixes: namespacePrefixes,
+      ...(options.indent !== undefined ? { indent: options.indent } : {}),
+      ...(options.schemaLocation !== undefined ? { schemaLocation: options.schemaLocation } : {}),
+    });
+    let json: JsonValue | undefined;
+    let jsonStatus: Sample['jsonStatus'] = 'not-requested';
+    if (options.json !== false) {
+      try {
+        json = toJson(tree, options.json ?? {});
+        jsonStatus = 'generated';
+      } catch (error) {
+        if (!(error instanceof JsonMappingError)) {
+          throw error;
+        }
+        problems.warning('json-mapping', error.message);
+        jsonStatus = 'unavailable';
+      }
+    }
+    let valid: boolean | undefined;
+    let errors: string[] = [];
+    if (validate) {
+      const verdicts = await (options.validator ?? validateXml)(prepared.schemas, [xml]);
+      const verdict = verdicts[0];
+      if (verdicts.length !== 1 || !verdict || typeof verdict.valid !== 'boolean' || !Array.isArray(verdict.errors)) {
+        throw new TypeError('validator must return exactly one explicit verdict per document');
+      }
+      valid = verdict.valid;
+      errors = verdict.errors;
+    }
+    const issues = [...prepared.loading, ...problems.list];
+    const status: SampleStatus = template
+      ? 'template'
+      : issues.some((p) => p.severity === 'error')
+        ? 'incomplete'
+        : valid === true
+          ? 'valid'
+          : valid === false
+            ? 'invalid'
+            : 'unvalidated';
+    last = {
+      xml,
+      tree,
+      ...(json !== undefined ? { json } : {}),
+      jsonStatus,
+      valid,
+      status,
+      seed,
+      attempts: attempt + 1,
+      errors,
+      problems: issues,
+      choices: walker.choices,
+    };
+    if (!validate || status === 'valid') {
+      return last;
+    }
+  }
+  if (!last) {
+    throw new Error('no generation attempt was performed');
+  }
+  return last;
+}
+/** Generates one document. Inspect status; a returned object is not automatically a valid instance. */
+export async function generateSample(input: GenerateInput, options: GenerateOptions = {}): Promise<Sample> {
+  checkOptions(options);
+  return generatePrepared(prepare(input, options), options);
+}
+export interface BatchOptions extends GenerateOptions {
+  count?: number;
+  coverage?: boolean;
+}
+export interface Coverage {
+  scope: 'encountered-choices';
+  covered: number;
+  total: number;
+  complete: boolean;
+  uncovered: {
+    id: string;
+    branch: number;
+  }[];
+}
+export interface SampleBatch {
+  samples: Sample[];
+  coverage: Coverage;
+}
+/** Bounded branch exploration. Coverage counts accepted XML instances, not attempts or templates. */
+export async function generateSamples(input: GenerateInput, options: BatchOptions = {}): Promise<SampleBatch> {
+  checkOptions(options);
+  const count = options.count ?? 1;
+  if (!Number.isSafeInteger(count) || count < 1 || count > 1000) {
+    throw new RangeError('count must be an integer from 1 to 1000');
+  }
+  if (options.coverage && (options.mode === 'template' || options.validate === false)) {
+    throw new TypeError('coverage requires validated instance mode');
+  }
+  const prepared = prepare(input, options);
+  const known = new Map<string, number>();
+  const accepted = new Map<string, Set<number>>();
+  const tried = new Map<string, number[]>();
+  const balanced: ChoiceStrategy = (context) => {
+    const id = choiceId(context.set, context.node);
+    known.set(id, context.branches.length);
+    const attempts = tried.get(id) ?? context.branches.map(() => 0);
+    let selected = 0;
+    let best = Infinity;
+    context.branches.forEach((_, branch) => {
+      const score = (accepted.get(id)?.has(branch) ? 1000000 : 0) + (attempts[branch] ?? 0);
+      if (score < best) {
+        best = score;
+        selected = branch;
+      }
+    });
+    attempts[selected] = (attempts[selected] ?? 0) + 1;
+    tried.set(id, attempts);
+    return selected;
+  };
+  const samples: Sample[] = [];
+  let seed = options.seed ?? 1;
+  for (let i = 0; i < count; i += 1) {
+    const sample = await generatePrepared(prepared, {
+      ...options,
+      seed,
+      ...(options.coverage ? { choice: balanced } : {}),
+    });
+    samples.push(sample);
+    for (const visit of sample.choices) {
+      known.set(visit.id, visit.branches);
+      if (sample.status === 'valid') {
+        const branches = accepted.get(visit.id) ?? new Set<number>();
+        branches.add(visit.branch);
+        accepted.set(visit.id, branches);
+      }
+    }
+    seed = sample.seed + 1;
+  }
+  const uncovered: Coverage['uncovered'] = [];
+  let total = 0;
+  for (const [id, branches] of known) {
+    total += branches;
+    for (let branch = 0; branch < branches; branch += 1) {
+      if (!accepted.get(id)?.has(branch)) {
+        uncovered.push({ id, branch });
+      }
+    }
+  }
+  return {
+    samples,
+    coverage: {
+      scope: 'encountered-choices',
+      total,
+      covered: total - uncovered.length,
+      complete: uncovered.length === 0,
+      uncovered,
+    },
+  };
+}

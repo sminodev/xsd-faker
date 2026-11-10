@@ -1,0 +1,311 @@
+// The facets of a simple type: its restriction chain followed down to a built-in type, with the facets of all steps
+// merged into one description of the allowed values. The raw facets are kept, because values are both generated
+// and checked against them.
+
+import { compareDecimal } from '../values/decimal.js';
+import type { Element } from '@xmldom/xmldom';
+import type { At, Problems } from './problems.js';
+import { attr, type QName, type SchemaSet, XS, xsChild, xsChildren } from './schema-set.js';
+
+export interface Bound {
+  /** Original bound, retained for exact decimal and large-integer arithmetic. */
+  lexical?: string;
+  value: number;
+  exclusive: boolean;
+}
+
+export interface Facets {
+  /** Local name of the built-in type at the bottom of the chain, such as `string` or `decimal`. */
+  builtin: string;
+  variety: 'atomic' | 'list' | 'union';
+  /** The allowed values; the last restriction step with enumerations wins. */
+  enumeration?: string[];
+  /** Raw XML Schema patterns, one array per restriction step: alternatives within a step, all steps apply. */
+  patterns: string[][];
+  length?: number;
+  minLength?: number;
+  maxLength?: number;
+  /** Numeric bounds, for number types only. */
+  min?: Bound;
+  max?: Bound;
+  totalDigits?: number;
+  fractionDigits?: number;
+  /** A non-numeric bound that still requires final validator checks. */
+  unsupportedBounds?: boolean;
+  /** The item type of a list. */
+  item?: Facets;
+  /** The member types of a union. */
+  members?: Facets[];
+}
+
+/** A simple type given by name or as an anonymous xs:simpleType element. */
+export type SimpleTypeRef = QName | Element;
+
+const isElement = (type: SimpleTypeRef): type is Element => 'nodeType' in type;
+
+/** Built-in integer types and their value ranges. */
+export const INTEGERS: Readonly<Record<string, { min?: number; max?: number }>> = {
+  integer: {},
+  nonPositiveInteger: { max: 0 },
+  negativeInteger: { max: -1 },
+  nonNegativeInteger: { min: 0 },
+  positiveInteger: { min: 1 },
+  long: {},
+  int: { min: -2147483648, max: 2147483647 },
+  short: { min: -32768, max: 32767 },
+  byte: { min: -128, max: 127 },
+  unsignedLong: { min: 0 },
+  unsignedInt: { min: 0, max: 4294967295 },
+  unsignedShort: { min: 0, max: 65535 },
+  unsignedByte: { min: 0, max: 255 },
+};
+
+const NUMBERS = ['decimal', 'float', 'double'];
+const OTHER_BUILTINS = [
+  'anySimpleType',
+  'anyType',
+  'string',
+  'normalizedString',
+  'token',
+  'language',
+  'Name',
+  'NCName',
+  'ID',
+  'IDREF',
+  'IDREFS',
+  'ENTITY',
+  'ENTITIES',
+  'NMTOKEN',
+  'NMTOKENS',
+  'QName',
+  'NOTATION',
+  'anyURI',
+  'boolean',
+  'base64Binary',
+  'hexBinary',
+  'date',
+  'dateTime',
+  'time',
+  'duration',
+  'gYear',
+  'gYearMonth',
+  'gMonth',
+  'gMonthDay',
+  'gDay',
+];
+
+export function isNumeric(builtin: string): boolean {
+  return INTEGERS[builtin] !== undefined || NUMBERS.includes(builtin);
+}
+
+export function isKnownBuiltin(local: string): boolean {
+  return isNumeric(local) || OTHER_BUILTINS.includes(local);
+}
+
+/** The JSON type of a value: what a JSON form of the sample would use. */
+export function jsonTypeOf(facets: Facets): 'integer' | 'number' | 'boolean' | 'string' {
+  if (facets.variety === 'union') {
+    const types = new Set((facets.members ?? []).map(jsonTypeOf));
+    return types.size === 1 ? ([...types][0] ?? 'string') : 'string';
+  }
+  if (facets.variety === 'list') {
+    return 'string';
+  }
+  if (INTEGERS[facets.builtin] !== undefined || (isNumeric(facets.builtin) && facets.fractionDigits === 0)) {
+    return 'integer';
+  }
+  if (isNumeric(facets.builtin)) {
+    return 'number';
+  }
+  return facets.builtin === 'boolean' ? 'boolean' : 'string';
+}
+
+/** The tighter of two bounds: for a lower bound the larger value, for an upper bound the smaller one. */
+function tighter(a: Bound | undefined, b: Bound, lower: boolean): Bound {
+  if (a === undefined) {
+    return b;
+  }
+  const order = compareDecimal(b.lexical ?? String(b.value), a.lexical ?? String(a.value)) ?? b.value - a.value;
+  if (order === 0) return { ...a, exclusive: a.exclusive || b.exclusive };
+  return (lower ? order > 0 : order < 0) ? b : a;
+}
+
+export class FacetReader {
+  constructor(
+    private readonly set: SchemaSet,
+    private readonly problems: Problems,
+  ) {}
+
+  private at(node: Element | undefined): At | undefined {
+    return node && this.set.at(node);
+  }
+
+  /**
+   * The facets of a simple type.
+   *
+   * @param from - the node that names the type, where problems with the name are reported
+   */
+  read(type: SimpleTypeRef, from?: Element, seen = new Set<Element>()): Facets {
+    if (!isElement(type)) {
+      if (type.ns === XS) {
+        if (!isKnownBuiltin(type.local)) {
+          this.problems.error('unknown-type', `xs:${type.local} is not a built-in type`, this.at(from));
+          return { builtin: 'string', variety: 'atomic', patterns: [] };
+        }
+        return this.builtin(type.local);
+      }
+      const found = this.set.lookup('simpleType', type);
+      if (!found) {
+        this.problems.error('unknown-type', `simple type {${type.ns}}${type.local} is not defined`, this.at(from));
+        return { builtin: 'string', variety: 'atomic', patterns: [] };
+      }
+      type = found.node;
+    }
+    if (seen.has(type)) {
+      this.problems.error('circular-type', 'circular simple type derivation', this.at(type));
+      return { builtin: 'string', variety: 'atomic', patterns: [] };
+    }
+    seen.add(type);
+
+    const restriction = xsChild(type, 'restriction');
+    if (restriction) {
+      const base = attr(restriction, 'base');
+      const inner = xsChild(restriction, 'simpleType');
+      const facets =
+        base !== undefined
+          ? this.read(this.set.resolveQName(restriction, base), restriction, seen)
+          : inner
+            ? this.read(inner, restriction, seen)
+            : this.builtin('anySimpleType');
+      return this.restrict(facets, restriction);
+    }
+    const list = xsChild(type, 'list');
+    if (list) {
+      const itemType = attr(list, 'itemType');
+      const inner = xsChild(list, 'simpleType');
+      const item = itemType
+        ? this.read(this.set.resolveQName(list, itemType), list, seen)
+        : inner
+          ? this.read(inner, list, seen)
+          : this.builtin('string');
+      return { builtin: 'string', variety: 'list', patterns: [], item };
+    }
+    const union = xsChild(type, 'union');
+    if (union) {
+      const named = (attr(union, 'memberTypes') ?? '')
+        .split(/\s+/)
+        .filter((q) => q.length > 0)
+        .map((q) => this.read(this.set.resolveQName(union, q), union, new Set(seen)));
+      const inner = xsChildren(union)
+        .filter((c) => c.localName === 'simpleType')
+        .map((c) => this.read(c, union, new Set(seen)));
+      return { builtin: 'anySimpleType', variety: 'union', patterns: [], members: [...named, ...inner] };
+    }
+    return this.builtin('anySimpleType');
+  }
+
+  /** A built-in type, with the value range of the integer types. */
+  private builtin(local: string): Facets {
+    const facets: Facets = { builtin: local, variety: 'atomic', patterns: [] };
+    const range = INTEGERS[local];
+    if (range?.min !== undefined) {
+      facets.min = { value: range.min, exclusive: false };
+    }
+    if (range?.max !== undefined) {
+      facets.max = { value: range.max, exclusive: false };
+    }
+    if (local === 'long') {
+      facets.min = { value: -9223372036854775808, lexical: '-9223372036854775808', exclusive: false };
+      facets.max = { value: 9223372036854775807, lexical: '9223372036854775807', exclusive: false };
+    } else if (local === 'unsignedLong') {
+      facets.max = { value: 18446744073709551615, lexical: '18446744073709551615', exclusive: false };
+    }
+    return facets;
+  }
+
+  /** Applies the facets of one restriction step to the facets of its base. */
+  restrict(base: Facets, restriction: Element): Facets {
+    const out: Facets = { ...base, patterns: [...base.patterns] };
+    const patterns: string[] = [];
+    const values: string[] = [];
+    for (const facet of xsChildren(restriction)) {
+      const name = facet.localName ?? '';
+      if (name === 'simpleType' || name === 'attribute' || name === 'attributeGroup' || name === 'anyAttribute') {
+        continue;
+      }
+      const value = attr(facet, 'value') ?? '';
+      if (name === 'enumeration') {
+        values.push(value);
+      } else if (name === 'pattern') {
+        patterns.push(value);
+      } else {
+        this.mergeFacet(out, name, value, facet);
+      }
+    }
+    if (patterns.length > 0) {
+      out.patterns.push(patterns);
+    }
+    if (values.length > 0) {
+      out.enumeration = values;
+    }
+    return out;
+  }
+
+  /** Merges one facet (other than pattern and enumeration) into `facets`, keeping the tightest limit. */
+  private mergeFacet(facets: Facets, name: string, value: string, node: Element): void {
+    const count = Number(value);
+    switch (name) {
+      case 'length':
+      case 'minLength':
+      case 'maxLength':
+      case 'totalDigits':
+      case 'fractionDigits':
+        if (!/^\s*\+?[0-9]+\s*$/.test(value) || (name === 'totalDigits' && count === 0)) {
+          this.problems.error(
+            'invalid-facet',
+            `${name} needs a ${name === 'totalDigits' ? 'positive' : 'non-negative'} integer, not "${value}"`,
+            this.at(node),
+          );
+          return;
+        }
+        if (name === 'length') {
+          facets.length = count;
+        } else if (name === 'minLength') {
+          facets.minLength = Math.max(facets.minLength ?? 0, count);
+        } else if (name === 'maxLength') {
+          facets.maxLength = Math.min(facets.maxLength ?? Infinity, count);
+        } else if (name === 'totalDigits') {
+          facets.totalDigits = Math.min(facets.totalDigits ?? Infinity, count);
+        } else {
+          facets.fractionDigits = Math.min(facets.fractionDigits ?? Infinity, count);
+        }
+        return;
+      case 'minInclusive':
+      case 'minExclusive':
+      case 'maxInclusive':
+      case 'maxExclusive': {
+        if (!isNumeric(facets.builtin)) {
+          facets.unsupportedBounds = true;
+          this.problems.warning('unsupported', `${name} on xs:${facets.builtin} is not supported`, this.at(node));
+          return;
+        }
+        const bound = Number(value.trim());
+        if (value.trim() === '' || !Number.isFinite(bound)) {
+          this.problems.error('invalid-facet', `${name} needs a number, not "${value}"`, this.at(node));
+          return;
+        }
+        const exclusive = name.endsWith('Exclusive');
+        if (name.startsWith('min')) {
+          facets.min = tighter(facets.min, { value: bound, lexical: value.trim(), exclusive }, true);
+        } else {
+          facets.max = tighter(facets.max, { value: bound, lexical: value.trim(), exclusive }, false);
+        }
+        return;
+      }
+      case 'whiteSpace':
+        return;
+      default:
+        this.problems.error('unsupported', `facet xs:${name} is not supported`, this.at(node));
+    }
+  }
+}

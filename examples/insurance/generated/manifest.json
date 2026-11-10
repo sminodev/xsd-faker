@@ -1,0 +1,89 @@
+{
+  "package": {
+    "name": "xsd-faker",
+    "version": "0.2.0"
+  },
+  "generation": {
+    "count": 3,
+    "mode": "instance",
+    "seed": 7,
+    "repeat": 2,
+    "maxTotalDepth": 64,
+    "maxNodes": 10000,
+    "attempts": 10,
+    "optionalElements": "all",
+    "optionalAttributes": "all",
+    "choice": "first",
+    "profile": "insurance",
+    "locale": "de",
+    "coverage": true,
+    "validate": true,
+    "fillElements": true,
+    "fillAttributes": true,
+    "json": {
+      "mode": "compact",
+      "numbers": "number"
+    }
+  },
+  "entry": "claim.xsd",
+  "format": "both",
+  "jsonMode": "compact",
+  "jsonSchemaValidation": "not-performed",
+  "coverage": {
+    "scope": "encountered-choices",
+    "total": 2,
+    "covered": 2,
+    "complete": true,
+    "uncovered": []
+  },
+  "samples": [
+    {
+      "number": 1,
+      "seed": 7,
+      "attempts": 1,
+      "status": "valid",
+      "xmlValid": true,
+      "jsonStatus": "generated",
+      "problems": [],
+      "choices": [
+        {
+          "id": "claim.xsd#schema[0]/element[0]/complexType[0]/sequence[0]/choice[5]",
+          "branch": 0,
+          "branches": 2
+        }
+      ]
+    },
+    {
+      "number": 2,
+      "seed": 8,
+      "attempts": 1,
+      "status": "valid",
+      "xmlValid": true,
+      "jsonStatus": "generated",
+      "problems": [],
+      "choices": [
+        {
+          "id": "claim.xsd#schema[0]/element[0]/complexType[0]/sequence[0]/choice[5]",
+          "branch": 1,
+          "branches": 2
+        }
+      ]
+    },
+    {
+      "number": 3,
+      "seed": 9,
+      "attempts": 1,
+      "status": "valid",
+      "xmlValid": true,
+      "jsonStatus": "generated",
+      "problems": [],
+      "choices": [
+        {
+          "id": "claim.xsd#schema[0]/element[0]/complexType[0]/sequence[0]/choice[5]",
+          "branch": 0,
+          "branches": 2
+        }
+      ]
+    }
+  ]
+}
