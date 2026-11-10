@@ -11,7 +11,7 @@ schema. A returned sample is not automatically valid: check its `status` and dia
 
 ## Quick start
 
-Requires Node.js 22.12 or later. Install the package in your project:
+Requires Node.js 22.13 or later. Install the package in your project:
 
 ```sh
 npm install xsd-faker
@@ -149,6 +149,7 @@ repeated elements, mixed content and wildcards. [Examples](examples/README.md) s
 
 ```sh
 npm run typecheck
+npm run lint
 npm run build
 npm test
 npm run test:acceptance

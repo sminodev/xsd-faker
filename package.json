@@ -4,7 +4,7 @@
   "description": "Generate reproducible XML and JSON test fixtures from XSD files.",
   "type": "module",
   "engines": {
-    "node": ">=22.12"
+    "node": ">=22.13"
   },
   "scripts": {
     "test": "vitest run",
@@ -13,8 +13,10 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "test:acceptance": "npm run build && node --test test/acceptance.test.mjs",
-    "verify": "npm run typecheck && npm run build && npm test && node --test test/acceptance.test.mjs",
-    "prepack": "npm run build && node -e \"require('node:fs').chmodSync('dist/bin.js', 0o755)\""
+    "verify": "npm run typecheck && npm run lint && npm run build && npm test && node --test test/acceptance.test.mjs",
+    "prepack": "npm run build && node -e \"require('node:fs').chmodSync('dist/bin.js', 0o755)\"",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix"
   },
   "exports": {
     ".": {
@@ -33,9 +35,12 @@
     "xmllint-wasm": "^5.3.0"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@types/node": "^22.20.5",
+    "eslint": "^10.14.0",
     "prettier": "^3.9.10",
     "typescript": "~6.0.3",
+    "typescript-eslint": "^8.72.2",
     "vitest": "^5.1.0"
   },
   "license": "MIT",
@@ -51,5 +56,11 @@
   "bin": {
     "xsd-faker": "./dist/bin.js"
   },
-  "types": "./dist/index.d.ts"
+  "types": "./dist/index.d.ts",
+  "overrides": {
+    "minimatch": "^11.0.4"
+  },
+  "allowScripts": {
+    "fsevents": false
+  }
 }

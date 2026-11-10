@@ -1,6 +1,6 @@
 # Development
 
-Use Node.js 22.12 or later and `npm ci`. The package is TypeScript compiled to ES modules with `tsc`.
+Use Node.js 22.13 or later and `npm ci`. The package is TypeScript compiled to ES modules with `tsc`.
 The only runtime dependencies are `@xmldom/xmldom` and `xmllint-wasm`.
 
 ## Source layout
@@ -28,6 +28,7 @@ boundary between XML and JSON; do not add a second generator for the JSON path.
 
 ```sh
 npm run typecheck
+npm run lint
 npm run build
 npm test
 npm run test:acceptance
@@ -35,7 +36,7 @@ npm run format:check
 npm run verify
 ```
 
-`npm run verify` runs typecheck, build, unit tests and acceptance tests in that order. The
+`npm run verify` runs typecheck, typed ESLint checks, build, unit tests and acceptance tests in that order. The
 `src/**/*.test.ts` suite uses Vitest. It covers the parser, random source, facets, walker,
 serialization and validation. The `XSD_CORPUS` suite runs only when that variable names a directory of
 schemas; otherwise no corpus tests are registered. Each generated corpus sample must have
@@ -46,6 +47,9 @@ regular WASM validator. Build before running `node --test test/acceptance.test.m
 paired output, branch strategies, limits, filesystem access, CLI exit codes
 and the synthetic examples. It does not use mocks for successful XSD validation. Some rejection tests
 inject a failing validator to test error handling.
+
+ESLint uses the recommended TypeScript rules with type information. `npm run lint:fix` applies
+automatic fixes; Prettier handles formatting separately.
 
 ## Adding a feature
 

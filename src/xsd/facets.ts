@@ -215,10 +215,10 @@ export class FacetReader {
       facets.max = { value: range.max, exclusive: false };
     }
     if (local === 'long') {
-      facets.min = { value: -9223372036854775808, lexical: '-9223372036854775808', exclusive: false };
-      facets.max = { value: 9223372036854775807, lexical: '9223372036854775807', exclusive: false };
+      facets.min = { value: Number('-9223372036854775808'), lexical: '-9223372036854775808', exclusive: false };
+      facets.max = { value: Number('9223372036854775807'), lexical: '9223372036854775807', exclusive: false };
     } else if (local === 'unsignedLong') {
-      facets.max = { value: 18446744073709551615, lexical: '18446744073709551615', exclusive: false };
+      facets.max = { value: Number('18446744073709551615'), lexical: '18446744073709551615', exclusive: false };
     }
     return facets;
   }

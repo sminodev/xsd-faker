@@ -231,7 +231,8 @@ export async function run(
         location === 'absolute' ? resolve(entry) : relative(outputDirectory, resolve(entry))
       ).replaceAll('\\', '/');
     }
-    const { validator: _validator, ...recordedOptions } = options;
+    const recordedOptions = { ...options };
+    delete recordedOptions.validator;
     const batch = await generateSampleFiles(entry, { ...options, ...access });
     for (const sample of batch.samples) {
       for (const problem of sample.problems) {
@@ -267,7 +268,7 @@ export async function run(
         mkdirSync(directory);
       } catch (error) {
         if (error && typeof error === 'object' && 'code' in error && error.code === 'EEXIST') {
-          throw new Error(`output directory already exists: ${directory}; choose a new --out-dir`);
+          throw new Error(`output directory already exists: ${directory}; choose a new --out-dir`, { cause: error });
         }
         throw error;
       }

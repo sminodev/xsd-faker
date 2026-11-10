@@ -1,21 +1,11 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { performance } from 'node:perf_hooks';
 import { mkdtempSync, readFileSync, writeFileSync, mkdirSync, rmSync, readdirSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import {
-  generateSample,
-  generateSamples,
-  listRoots,
-  toJson,
-  JsonMappingError,
-  valueLists,
-  firstOf,
-  facetValues,
-  profileValues,
-  validateXml as validator,
-} from '../dist/index.js';
+import { generateSample, generateSamples, listRoots, toJson, validateXml as validator } from '../dist/index.js';
 import { generateSampleFile } from '../dist/node.js';
 import { run } from '../dist/cli.js';
 

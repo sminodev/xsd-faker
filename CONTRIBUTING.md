@@ -1,6 +1,6 @@
 # Contributing
 
-Use Node.js 22.12 or later and install the locked dependencies with `npm ci`.
+Use Node.js 22.13 or later and install the locked dependencies with `npm ci`.
 The [development guide](docs/development.md) describes the source layout and test suites.
 
 Keep a pull request focused. For a behaviour change, add a small XSD and a regression test that fails

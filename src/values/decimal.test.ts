@@ -11,7 +11,7 @@ it('compares bounds beyond Number precision without rounding their lexical form'
         builtin: 'long',
         variety: 'atomic',
         patterns: [],
-        min: { value: 9223372036854775807, lexical: '9223372036854775807', exclusive: false },
+        min: { value: Number('9223372036854775807'), lexical: '9223372036854775807', exclusive: false },
       },
       '9223372036854775806',
     ),
