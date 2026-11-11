@@ -225,6 +225,13 @@ export class Walker {
     if (typeName !== undefined) {
       const qname = this.set.resolveQName(decl, typeName);
       const complex = qname.ns === XS ? undefined : this.set.lookup('complexType', qname);
+      if (complex && ['true', '1'].includes(attr(complex.node, 'abstract') ?? '')) {
+        this.problems.error(
+          'unsupported',
+          `${name} has the abstract type ${typeName}; choosing a derived type with xsi:type is not supported`,
+          this.set.at(decl),
+        );
+      }
       if (complex) {
         this.complex(out, complex.node, complex.doc, here, depth, fixed, decl);
       } else if (!(qname.ns === XS && qname.local === 'anyType')) {

@@ -364,6 +364,13 @@ test('mixed content with a fixed value holds that text', async () => {
   okay(sample);
   assert.equal(plain(sample.json).value, 'AUTO');
 });
+test('an element of an abstract type is reported before validation', async () => {
+  const sample = await generated(
+    '<xs:complexType name="Shape" abstract="true"><xs:sequence><xs:element name="id" type="xs:string"/></xs:sequence></xs:complexType><xs:element name="R" type="Shape"/>',
+  );
+  assert.equal(sample.status, 'incomplete');
+  assert.ok(sample.problems.some((p) => p.code === 'unsupported' && /abstract type Shape/.test(p.message)));
+});
 test('mixed content keeps the prefixes of the XML', async () => {
   const sample = await generated(
     '<xs:element name="R"><xs:complexType mixed="true"><xs:sequence><xs:element name="b" type="xs:string"/></xs:sequence></xs:complexType></xs:element>',
