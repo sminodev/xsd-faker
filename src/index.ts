@@ -35,7 +35,7 @@ export type { ValueContext, ValueSource } from './values/source.js';
 export { facetValues, firstOf } from './values/source.js';
 export { profileValues, valueLists, PROFILE_NAMES } from './values/profiles.js';
 export type { ProfileName, ProfileOptions, ValueLists } from './values/profiles.js';
-export type { InstanceElement, InstanceNode } from './xml/tree.js';
+export type { GroupOccurrence, InstanceElement, InstanceNode } from './xml/tree.js';
 export { serializeXml } from './xml/serialize.js';
 export type { Problem, ProblemCode } from './xsd/problems.js';
 export type { SchemaSource } from './xsd/schema-set.js';
@@ -294,7 +294,7 @@ async function generatePrepared(prepared: Prepared, options: GenerateOptions): P
     let jsonStatus: Sample['jsonStatus'] = 'not-requested';
     if (options.json !== false) {
       try {
-        json = toJson(tree, options.json ?? {});
+        json = toJson(tree, options.json ?? {}, namespacePrefixes);
         jsonStatus = 'generated';
       } catch (error) {
         if (!(error instanceof JsonMappingError)) {

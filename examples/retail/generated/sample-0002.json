@@ -11,7 +11,7 @@
   "Wanted": "1993-07-07",
   "Packages": 95,
   "Note": {
-    "value": "O <b xmlns=\"urn:example:common\">Jnind</b><i xmlns=\"urn:example:common\">Rtqihc</i>"
+    "value": "O <c:b xmlns:c=\"urn:example:common\">Jnind</c:b><c:i xmlns:c=\"urn:example:common\">Rtqihc</c:i>"
   },
   "DiscountCode": "L",
   "DiscountPercent": 25,
@@ -58,10 +58,10 @@
   "Extensions": {
     "Note": [
       {
-        "value": "Qnu <b xmlns=\"urn:example:common\">Efblghwaap</b><i xmlns=\"urn:example:common\">Hhq</i>"
+        "value": "Qnu <c:b xmlns:c=\"urn:example:common\">Efblghwaap</c:b><c:i xmlns:c=\"urn:example:common\">Hhq</c:i>"
       },
       {
-        "value": "Akioqqxp <b xmlns=\"urn:example:common\">Hp</b><i xmlns=\"urn:example:common\">Jqeu</i>"
+        "value": "Akioqqxp <c:b xmlns:c=\"urn:example:common\">Hp</c:b><c:i xmlns:c=\"urn:example:common\">Jqeu</c:i>"
       }
     ]
   }

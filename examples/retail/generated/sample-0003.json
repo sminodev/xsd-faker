@@ -10,7 +10,7 @@
   "Wanted": "2014-04-29",
   "Packages": 73,
   "Note": {
-    "value": "Wlweribwf <b xmlns=\"urn:example:common\">Fbmirhoy</b><i xmlns=\"urn:example:common\">Uppnrm</i>"
+    "value": "Wlweribwf <c:b xmlns:c=\"urn:example:common\">Fbmirhoy</c:b><c:i xmlns:c=\"urn:example:common\">Uppnrm</c:i>"
   },
   "DiscountCode": "Rzxatc",
   "DiscountPercent": 97.5,
@@ -57,10 +57,10 @@
   "Extensions": {
     "Note": [
       {
-        "value": "Sk <b xmlns=\"urn:example:common\">Ixcosad</b><i xmlns=\"urn:example:common\">Mg</i>"
+        "value": "Sk <c:b xmlns:c=\"urn:example:common\">Ixcosad</c:b><c:i xmlns:c=\"urn:example:common\">Mg</c:i>"
       },
       {
-        "value": "Dcfqspk <b xmlns=\"urn:example:common\">Whtbpeqhtm</b><i xmlns=\"urn:example:common\">Yvz</i>"
+        "value": "Dcfqspk <c:b xmlns:c=\"urn:example:common\">Whtbpeqhtm</c:b><c:i xmlns:c=\"urn:example:common\">Yvz</c:i>"
       }
     ]
   }

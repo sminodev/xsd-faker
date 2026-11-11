@@ -10,7 +10,7 @@
   "Wanted": "1996-10",
   "Packages": 37,
   "Note": {
-    "value": "Gwedehotbx <b xmlns=\"urn:example:common\">Xvbejla</b><i xmlns=\"urn:example:common\">Ysrij</i>"
+    "value": "Gwedehotbx <c:b xmlns:c=\"urn:example:common\">Xvbejla</c:b><c:i xmlns:c=\"urn:example:common\">Ysrij</c:i>"
   },
   "DiscountCode": "Qi",
   "DiscountPercent": 92.2,
@@ -57,10 +57,10 @@
   "Extensions": {
     "Note": [
       {
-        "value": "Ucgvvu <b xmlns=\"urn:example:common\">Mvkz</b><i xmlns=\"urn:example:common\">Woz</i>"
+        "value": "Ucgvvu <c:b xmlns:c=\"urn:example:common\">Mvkz</c:b><c:i xmlns:c=\"urn:example:common\">Woz</c:i>"
       },
       {
-        "value": "Oreskpwjhc <b xmlns=\"urn:example:common\">Bsy</b><i xmlns=\"urn:example:common\">Hnkstqsqph</i>"
+        "value": "Oreskpwjhc <c:b xmlns:c=\"urn:example:common\">Bsy</c:b><c:i xmlns:c=\"urn:example:common\">Hnkstqsqph</c:i>"
       }
     ]
   }

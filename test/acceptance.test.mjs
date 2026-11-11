@@ -27,6 +27,8 @@ const okay = (sample) => {
   assert.equal(sample.valid, true);
 };
 const values = { value: () => 'Test' };
+/** Compact JSON objects have no prototype; `deepEqual` compares against ordinary ones. */
+const plain = (json) => JSON.parse(JSON.stringify(json));
 const model = `<xs:element name="Root"><xs:complexType><xs:sequence><xs:element name="Required" type="xs:string"/><xs:element name="Optional" type="xs:string" minOccurs="0"/></xs:sequence><xs:attribute name="mandatory" type="xs:string" use="required"/><xs:attribute name="optional" type="xs:string"/></xs:complexType></xs:element>`;
 const choice = `<xs:element name="Root"><xs:complexType><xs:choice><xs:element name="First" type="xs:string"/><xs:element name="Second" type="xs:string"/><xs:element name="Third" type="xs:string"/></xs:choice></xs:complexType></xs:element>`;
 
@@ -113,10 +115,136 @@ for (const [repeat, expected] of [
 test('one occurrence of a repeated group remains an array in JSON', async () => {
   const sample = await generated(
     '<xs:element name="Root"><xs:complexType><xs:sequence maxOccurs="3"><xs:element name="Code" type="xs:string"/></xs:sequence></xs:complexType></xs:element>',
+    { values },
   );
   okay(sample);
-  assert.ok(Array.isArray(sample.json.Code));
-  assert.equal(sample.json.Code.length, 1);
+  assert.deepEqual(plain(sample.json), { '#sequence': [{ Code: 'Test' }] });
+});
+const typed = { value: ({ name }) => (name === 'a' ? '1' : 'x') };
+const pair = '<xs:element name="a" type="xs:int"/><xs:element name="b" type="xs:string"/>';
+test('a repeated sequence keeps the elements of each occurrence together', async () => {
+  const sample = await generated(
+    `<xs:element name="R"><xs:complexType><xs:sequence maxOccurs="3">${pair}</xs:sequence></xs:complexType></xs:element>`,
+    { repeat: 2, values: typed },
+  );
+  okay(sample);
+  assert.match(sample.xml, /<a>1<\/a>\s*<b>x<\/b>\s*<a>1<\/a>\s*<b>x<\/b>/);
+  assert.deepEqual(plain(sample.json), {
+    '#sequence': [
+      { a: 1, b: 'x' },
+      { a: 1, b: 'x' },
+    ],
+  });
+});
+test('a repeated choice writes each occurrence as its own branch', async () => {
+  let turn = 0;
+  const sample = await generated(
+    '<xs:element name="R"><xs:complexType><xs:choice maxOccurs="3"><xs:element name="a" type="xs:int"/><xs:element name="b" type="xs:string"/></xs:choice></xs:complexType></xs:element>',
+    { repeat: 3, values: typed, choice: () => turn++ % 2 },
+  );
+  okay(sample);
+  assert.deepEqual(plain(sample.json), { '#choice': [{ a: 1 }, { b: 'x' }, { a: 1 }] });
+});
+test('repeated groups nest and group references use their name', async () => {
+  const sample = await generated(
+    `<xs:group name="Pair"><xs:sequence>${pair}</xs:sequence></xs:group><xs:element name="R"><xs:complexType><xs:sequence maxOccurs="2"><xs:element name="h" type="xs:string"/><xs:group ref="Pair" maxOccurs="2"/></xs:sequence></xs:complexType></xs:element>`,
+    { repeat: 2, values: typed },
+  );
+  okay(sample);
+  const inner = [
+    { a: 1, b: 'x' },
+    { a: 1, b: 'x' },
+  ];
+  assert.deepEqual(plain(sample.json), {
+    '#sequence': [
+      { h: 'x', '#Pair': inner },
+      { h: 'x', '#Pair': inner },
+    ],
+  });
+});
+test('property names of repeated groups do not depend on the branch taken', async () => {
+  const body =
+    '<xs:element name="R"><xs:complexType><xs:choice><xs:sequence maxOccurs="2"><xs:element name="a" type="xs:int"/></xs:sequence><xs:sequence maxOccurs="2"><xs:element name="b" type="xs:string"/></xs:sequence></xs:choice></xs:complexType></xs:element>';
+  const first = await generated(body, { values: typed });
+  okay(first);
+  assert.deepEqual(plain(first.json), { '#sequence': [{ a: 1 }] });
+  const second = await generated(body, { values: typed, choice: { prefer: ['b'] } });
+  okay(second);
+  assert.deepEqual(plain(second.json), { '#sequence:2': [{ b: 'x' }] });
+});
+test('an extension continues the numbering of the repeated groups of its base', async () => {
+  const sample = await generated(
+    '<xs:complexType name="Base"><xs:sequence maxOccurs="2"><xs:element name="a" type="xs:int"/></xs:sequence></xs:complexType><xs:complexType name="Sub"><xs:complexContent><xs:extension base="Base"><xs:sequence maxOccurs="2"><xs:element name="b" type="xs:string"/></xs:sequence></xs:extension></xs:complexContent></xs:complexType><xs:element name="R" type="Sub"/>',
+    { values: typed },
+  );
+  okay(sample);
+  assert.deepEqual(plain(sample.json), { '#sequence': [{ a: 1 }], '#sequence:2': [{ b: 'x' }] });
+});
+test('an occurrence without elements has no item in JSON', async () => {
+  const body =
+    '<xs:element name="R"><xs:complexType><xs:sequence minOccurs="2" maxOccurs="2"><xs:element name="a" type="xs:int" minOccurs="0"/></xs:sequence></xs:complexType></xs:element>';
+  const empty = await generated(body);
+  okay(empty);
+  assert.deepEqual(plain(empty.json), {});
+  const full = await generated(body, { optional: 'all', values: typed });
+  okay(full);
+  assert.deepEqual(plain(full.json), { '#sequence': [{ a: 1 }, { a: 1 }] });
+});
+test('a name repeated only by its group is not an array inside the occurrence', async () => {
+  const sample = await generated(
+    `<xs:element name="R"><xs:complexType><xs:sequence><xs:element name="a" type="xs:int"/><xs:sequence maxOccurs="2">${pair}</xs:sequence></xs:sequence></xs:complexType></xs:element>`,
+    { values: typed },
+  );
+  okay(sample);
+  assert.deepEqual(plain(sample.json), { a: 1, '#sequence': [{ a: 1, b: 'x' }] });
+});
+test('two references to one group share its property', async () => {
+  const sample = await generated(
+    `<xs:group name="Pair"><xs:sequence>${pair}</xs:sequence></xs:group><xs:element name="R"><xs:complexType><xs:sequence><xs:group ref="Pair" maxOccurs="2"/><xs:element name="s" type="xs:string"/><xs:group ref="Pair" maxOccurs="2"/></xs:sequence></xs:complexType></xs:element>`,
+    { values: typed },
+  );
+  okay(sample);
+  assert.deepEqual(plain(sample.json), {
+    '#Pair': [
+      { a: 1, b: 'x' },
+      { a: 1, b: 'x' },
+    ],
+    s: 'x',
+  });
+});
+test('collisions and unsafe numbers inside an occurrence are refused', async () => {
+  const p = schema('<xs:element name="a" type="xs:string"/>', 'targetNamespace="urn:p"');
+  const main = schema(
+    '<xs:import namespace="urn:p" schemaLocation="p.xsd"/><xs:element name="R"><xs:complexType><xs:sequence maxOccurs="2"><xs:element name="a" type="xs:string"/><xs:element ref="p:a"/></xs:sequence></xs:complexType></xs:element>',
+    'xmlns:p="urn:p"',
+  );
+  const clash = await generateSample(
+    { entry: 'a.xsd', files: { 'a.xsd': main, 'p.xsd': p } },
+    { ...options, root: 'R' },
+  );
+  okay(clash);
+  assert.equal(clash.jsonStatus, 'unavailable');
+  assert.ok(clash.problems.some((problem) => problem.code === 'json-mapping'));
+  const unsafe = await generated(
+    '<xs:element name="R"><xs:complexType><xs:sequence maxOccurs="2"><xs:element name="n" type="xs:long" fixed="9223372036854775807"/></xs:sequence></xs:complexType></xs:element>',
+  );
+  okay(unsafe);
+  assert.equal(unsafe.jsonStatus, 'unavailable');
+});
+const priced = (attribute) =>
+  `<xs:complexType name="Amount"><xs:simpleContent><xs:extension base="xs:decimal">${attribute}</xs:extension></xs:simpleContent></xs:complexType><xs:element name="R"><xs:complexType><xs:sequence><xs:element name="Price" type="Amount"/></xs:sequence></xs:complexType></xs:element>`;
+test('simple content is an object even without attributes', async () => {
+  const optional = priced('<xs:attribute name="currency" type="xs:string"/>');
+  for (const optionalAttributes of ['none', 'all', 'random'])
+    for (const seed of [1, 2, 3, 4, 5, 6]) {
+      const sample = await generated(optional, { optionalAttributes, seed });
+      okay(sample);
+      assert.equal(typeof sample.json.Price, 'object');
+      assert.equal(typeof sample.json.Price.value, 'number');
+    }
+  const none = await generated(priced(''));
+  okay(none);
+  assert.equal(typeof none.json.Price.value, 'number');
 });
 test('a union of integers and decimals is a number', async () => {
   const sample = await generated(
@@ -221,6 +349,27 @@ test('a pattern on a union is met', async () => {
     okay(sample);
     assert.match(sample.json, /^[A-Z]{3}$/);
   }
+});
+test('mixed content keeps the prefixes of the XML', async () => {
+  const sample = await generated(
+    '<xs:element name="R"><xs:complexType mixed="true"><xs:sequence><xs:element name="b" type="xs:string"/></xs:sequence></xs:complexType></xs:element>',
+    { values, prefixes: { 'urn:t': 't' } },
+    'targetNamespace="urn:t" elementFormDefault="qualified"',
+  );
+  okay(sample);
+  assert.match(sample.xml, /<R xmlns="urn:t">/);
+  assert.match(sample.json.value, /<b xmlns="urn:t">Test<\/b>/);
+});
+test('tree JSON records the occurrence of each element', async () => {
+  const sample = await generated(
+    `<xs:element name="R"><xs:complexType><xs:sequence maxOccurs="2">${pair}</xs:sequence></xs:complexType></xs:element>`,
+    { repeat: 2, json: { mode: 'tree' } },
+  );
+  okay(sample);
+  assert.deepEqual(
+    sample.json.children.map((child) => child.groups),
+    [1, 1, 2, 2].map((occurrence) => [{ key: '#sequence', occurrence }]),
+  );
 });
 test('choice first and preferred choose a single branch', async () => {
   const a = await generated(choice);

@@ -8,7 +8,14 @@ import type { Element } from '@xmldom/xmldom';
 import type { Rng } from '../rng.js';
 import type { ValueSource } from '../values/source.js';
 import { generateValue } from '../values/generate.js';
-import { element, type InstanceAttribute, type InstanceElement, type InstanceNode, text } from '../xml/tree.js';
+import {
+  element,
+  type GroupOccurrence,
+  type InstanceAttribute,
+  type InstanceElement,
+  type InstanceNode,
+  text,
+} from '../xml/tree.js';
 import { enumerationScope, FacetReader, type Facets, holdsQNames, jsonTypeOf } from '../xsd/facets.js';
 import type { Problems } from '../xsd/problems.js';
 import {
@@ -112,6 +119,22 @@ interface ContentPlan {
   mixed: boolean;
 }
 
+/** What the content model says about one JSON object: an element's content or an occurrence of a repeated group. */
+interface ObjectScope {
+  /** the property of each repeated group, by group definition or anonymous particle */
+  keys: Map<Element, string>;
+  /** how many repeated groups use each name */
+  groupNames: Map<string, number>;
+  /** how many particles declare each element, by expanded name */
+  elements: Map<string, number>;
+}
+
+/** Where a particle writes: its JSON object and the repeated group occurrences around it. */
+interface Place {
+  scope: ObjectScope;
+  trail: readonly GroupOccurrence[];
+}
+
 const MODEL_GROUPS = ['sequence', 'choice', 'all', 'group'];
 /** Required content nested deeper than maxDepth + this is reported instead of generated. */
 const DEPTH_RESERVE = 25;
@@ -122,6 +145,7 @@ export class LimitError extends Error {}
 export class Walker {
   private readonly facets: FacetReader;
   private nodes = 0;
+  private occurrences = 0;
   readonly choices: { id: string; branch: number; branches: number }[] = [];
 
   constructor(
@@ -134,7 +158,7 @@ export class Walker {
 
   /** The instance of a global element. */
   root(component: Component): InstanceElement {
-    return this.element(component.node, component.doc, [], 0, { global: true, repeatable: false }) ?? element('', '');
+    return this.element(component.node, component.doc, [], 0, true) ?? element('', '');
   }
 
   // --- elements ------------------------------------------------------------------------------------------------
@@ -144,7 +168,7 @@ export class Walker {
     doc: SchemaDocument,
     path: readonly string[],
     depth: number,
-    how: { global: boolean; repeatable: boolean },
+    global: boolean,
   ): InstanceElement | undefined {
     this.nodes += 1;
     if (this.nodes > (this.options.maxNodes ?? 10000)) {
@@ -155,15 +179,15 @@ export class Walker {
     let ns: string;
     const ref = attr(node, 'ref');
     if (ref !== undefined) {
-      const global = this.set.lookup('element', this.set.resolveQName(node, ref));
-      if (!global) {
+      const target = this.set.lookup('element', this.set.resolveQName(node, ref));
+      if (!target) {
         this.problems.error('unknown-element', `element ${ref} is not defined`, this.set.at(node));
         return undefined;
       }
-      decl = global.node;
-      declDoc = global.doc;
-      ns = global.doc.targetNamespace;
-    } else if (how.global) {
+      decl = target.node;
+      declDoc = target.doc;
+      ns = target.doc.targetNamespace;
+    } else if (global) {
       ns = doc.targetNamespace;
     } else {
       const form = attr(node, 'form');
@@ -193,7 +217,7 @@ export class Walker {
         this.set.at(decl),
       );
     }
-    const out = element(ns, name, { repeatable: how.repeatable });
+    const out = element(ns, name);
     const fixed = attr(decl, 'fixed') ?? attr(decl, 'default');
     const typeName = attr(decl, 'type');
     const anonymousComplex = xsChild(decl, 'complexType');
@@ -276,6 +300,7 @@ export class Walker {
     out.attributes = this.attributes(out, plan.attributes, path, depth);
     if (plan.simple) {
       this.simpleText(out, plan.simple, path, fixed, decl);
+      out.simpleContent = true;
       return;
     }
     const children: InstanceNode[] = [];
@@ -284,20 +309,24 @@ export class Walker {
         text(`${generateValue({ builtin: 'string', variety: 'atomic', patterns: [] }, this.options.rng) ?? 'Text'} `),
       );
     }
+    const place = { scope: this.objectScope(plan.groups), trail: [] };
     for (const group of plan.groups) {
-      this.particle(group.node, group.doc, path, depth, children);
-    }
-    const counts = new Map<string, number>();
-    for (const group of plan.groups) this.childNames(group.node, group.doc, counts);
-    for (const child of children) {
-      if (child.kind === 'element' && (counts.get(clark(child.ns, child.name)) ?? 0) > 1) child.repeatable = true;
+      this.particle(group.node, group.doc, path, depth, children, new Set(), place);
     }
     out.children = children;
     if (plan.mixed) out.mixed = true;
   }
 
-  private childNames(node: Element, doc: SchemaDocument, counts: Map<string, number>, seen = new Set<Element>()): void {
-    if (occurs(node).max === 0 || seen.has(node)) return;
+  /** Reads a content model once, branches not taken included, because JSON names must not depend on the sample. */
+  private objectScope(models: readonly { node: Element; doc: SchemaDocument }[]): ObjectScope {
+    const scope: ObjectScope = { keys: new Map(), groupNames: new Map(), elements: new Map() };
+    for (const { node, doc } of models) this.declare(node, doc, scope, new Set());
+    return scope;
+  }
+
+  private declare(node: Element, doc: SchemaDocument, scope: ObjectScope, seen: Set<Element>): void {
+    const { max } = occurs(node);
+    if (max === 0 || seen.has(node)) return;
     const next = new Set([...seen, node]);
     if (node.localName === 'element') {
       const ref = attr(node, 'ref');
@@ -306,15 +335,42 @@ export class Walker {
         ? this.set.resolveQName(node, ref)
         : { ns: qualified ? doc.targetNamespace : '', local: attr(node, 'name') ?? '' };
       const key = clark(name.ns, name.local);
-      counts.set(key, (counts.get(key) ?? 0) + 1);
+      scope.elements.set(key, (scope.elements.get(key) ?? 0) + 1);
     } else if (node.localName === 'group') {
       const group = this.set.lookup('group', this.set.resolveQName(node, attr(node, 'ref') ?? ''));
-      if (group) this.childNames(group.node, group.doc, counts, next);
-      // A global group has no ref: visit its compositor.
-      else for (const child of xsChildren(node)) this.childNames(child, doc, counts, next);
-    } else {
-      for (const child of xsChildren(node)) this.childNames(child, doc, counts, next);
+      if (!group) return;
+      if (max > 1) {
+        claimGroupKey(scope, group.node, attr(group.node, 'name') ?? '');
+      } else {
+        for (const child of xsChildren(group.node)) this.declare(child, group.doc, scope, next);
+      }
+    } else if (MODEL_GROUPS.includes(node.localName ?? '')) {
+      if (max > 1) {
+        claimGroupKey(scope, node, node.localName ?? '');
+      } else {
+        for (const child of xsChildren(node)) this.declare(child, doc, scope, next);
+      }
     }
+  }
+
+  /** How to enter each occurrence of a model group: a repeated group is an object per occurrence. */
+  private entering(
+    group: Element,
+    max: number,
+    place: Place,
+    members: readonly Element[],
+    doc: SchemaDocument,
+  ): () => Place {
+    if (max <= 1) return () => place;
+    const key = place.scope.keys.get(group) ?? '';
+    const scope = this.objectScope(members.map((node) => ({ node, doc })));
+    return () => ({ scope, trail: [...place.trail, { key, occurrence: (this.occurrences += 1) }] });
+  }
+
+  /** Records where a generated element went, for the JSON serializer. */
+  private placed(child: InstanceElement, max: number, place: Place): void {
+    child.repeatable = max > 1 || (place.scope.elements.get(clark(child.ns, child.name)) ?? 0) > 1;
+    if (place.trail.length > 0) child.groups = [...place.trail];
   }
 
   /** The content of a complex type, following its derivation down to the base types. */
@@ -474,8 +530,8 @@ export class Walker {
     path: readonly string[],
     depth: number,
     out: InstanceNode[],
-    groups = new Set<Element>(),
-    inheritedRepeatable = false,
+    groups: Set<Element>,
+    place: Place,
   ): void {
     const { min, max } = occurs(node);
     if (max === 0) {
@@ -495,36 +551,40 @@ export class Walker {
     switch (node.localName) {
       case 'element':
         for (let k = 0; k < times; k += 1) {
-          const child = this.element(node, doc, path, depth + 1, {
-            global: false,
-            repeatable: max > 1 || inheritedRepeatable,
-          });
+          const child = this.element(node, doc, path, depth + 1, false);
           if (child) {
+            this.placed(child, max, place);
             out.push(child);
           }
         }
         return;
       case 'sequence':
-      case 'all':
+      case 'all': {
+        const members = xsChildren(node);
+        const enter = this.entering(node, max, place, members, doc);
         for (let k = 0; k < times; k += 1) {
-          for (const child of xsChildren(node)) {
-            this.particle(child, doc, path, depth, out, groups, inheritedRepeatable || max > 1);
+          const inner = enter();
+          for (const child of members) {
+            this.particle(child, doc, path, depth, out, groups, inner);
           }
         }
         return;
+      }
       case 'choice': {
         const branches = xsChildren(node).filter((c) => occurs(c).max > 0);
+        const enter = this.entering(node, max, place, branches, doc);
         for (let k = 0; k < times && branches.length > 0; k += 1) {
           const index = this.options.choice({ node, branches, path, set: this.set, rng: this.options.rng });
           if (!Number.isInteger(index) || index < 0 || index >= branches.length) {
             throw new RangeError('choice strategy returned an invalid branch index');
           }
           const indices = this.options.allBranches ? branches.map((_, i) => i) : [index];
+          const inner = enter();
           for (const selected of indices) {
             const branch = branches[selected];
             if (branch) {
               this.choices.push({ id: choiceId(this.set, node), branch: selected, branches: branches.length });
-              this.particle(branch, doc, path, depth, out, groups, inheritedRepeatable || max > 1);
+              this.particle(branch, doc, path, depth, out, groups, inner);
             }
           }
         }
@@ -542,23 +602,17 @@ export class Walker {
           return;
         }
         const compositor = xsChildren(group.node)[0];
+        const enter = this.entering(group.node, max, place, compositor ? [compositor] : [], group.doc);
         for (let k = 0; k < times && compositor; k += 1) {
-          this.particle(
-            compositor,
-            group.doc,
-            path,
-            depth,
-            out,
-            new Set([...groups, group.node]),
-            inheritedRepeatable || max > 1,
-          );
+          this.particle(compositor, group.doc, path, depth, out, new Set([...groups, group.node]), enter());
         }
         return;
       }
       case 'any':
         for (let k = 0; k < times; k += 1) {
-          const child = this.wildcard(node, doc, path, depth + 1, max > 1 || inheritedRepeatable);
+          const child = this.wildcard(node, doc, path, depth + 1);
           if (child) {
+            this.placed(child, max, place);
             out.push(child);
           }
         }
@@ -577,7 +631,6 @@ export class Walker {
     doc: SchemaDocument,
     path: readonly string[],
     depth: number,
-    repeatable: boolean,
   ): InstanceElement | undefined {
     const spec = (attr(node, 'namespace') ?? '##any').trim().split(/\s+/);
     const allowed = (ns: string) =>
@@ -597,7 +650,7 @@ export class Walker {
     );
     if (candidates.length > 0) {
       const chosen = this.options.rng.pick(candidates);
-      return this.element(chosen.node, chosen.doc, path, depth, { global: true, repeatable });
+      return this.element(chosen.node, chosen.doc, path, depth, true);
     }
     if ((attr(node, 'processContents') ?? 'strict') === 'strict') {
       this.problems.error(
@@ -616,8 +669,19 @@ export class Walker {
           : first.startsWith('##')
             ? 'urn:xsd-faker:any'
             : first;
-    return element(ns, 'any', { repeatable, children: [text('any content')] });
+    return element(ns, 'any', { children: [text('any content')] });
   }
+}
+
+/**
+ * The JSON property of a repeated group: `#sequence`, `#choice`, or `#` and the name of a referenced group; a further
+ * group of the same name adds `:2`, `:3`. The same group reached twice shares its property.
+ */
+function claimGroupKey(scope: ObjectScope, group: Element, name: string): void {
+  if (scope.keys.has(group)) return;
+  const count = (scope.groupNames.get(name) ?? 0) + 1;
+  scope.groupNames.set(name, count);
+  scope.keys.set(group, count === 1 ? `#${name}` : `#${name}:${count}`);
 }
 
 /** Stable within a schema set: document path and structural declaration path. */

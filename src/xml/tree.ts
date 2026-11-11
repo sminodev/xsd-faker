@@ -1,6 +1,7 @@
 // The instance tree: a generated document, independent of its output format. The XML serializer writes it as XML;
-// a JSON serializer can write the same data as JSON, which is why the tree keeps two facts XML text loses:
-// whether an element may repeat (an array in JSON, even with one item) and the JSON type of each value.
+// a JSON serializer can write the same data as JSON, which is why the tree keeps three facts XML text loses:
+// whether an element may repeat (an array in JSON, even with one item), which occurrence of a repeated model group
+// it belongs to, and the JSON type of each value.
 
 export type JsonType = 'integer' | 'number' | 'boolean' | 'string';
 
@@ -18,6 +19,14 @@ export interface InstanceText {
   type: JsonType;
 }
 
+/** One occurrence of a repeated model group. */
+export interface GroupOccurrence {
+  /** the JSON property of the group, for example `#sequence` */
+  key: string;
+  /** unique in the document */
+  occurrence: number;
+}
+
 export interface InstanceElement {
   kind: 'element';
   /** namespace URI, '' for none */
@@ -27,8 +36,12 @@ export interface InstanceElement {
   children: InstanceNode[];
   /** Text and child elements share an ordered content stream. */
   mixed?: boolean;
-  /** the particle, or an enclosing model group, allows repeated occurrences */
+  /** the particle allows repeated occurrences, or several particles of one JSON object declare its name */
   repeatable: boolean;
+  /** the occurrences of repeated model groups around this element within its parent, outermost first */
+  groups?: GroupOccurrence[];
+  /** a complex type with simple content: an object in JSON, even without attributes */
+  simpleContent?: boolean;
   /** the prefixes of QName values in this element and its attributes, with their namespaces */
   valueNamespaces?: Record<string, string>;
 }

@@ -1,4 +1,4 @@
-import { escapeText, serializeXml } from '../xml/serialize.js';
+import { type NamespacePlan, planNamespaces, serializeMixed } from '../xml/serialize.js';
 import type { InstanceElement, InstanceText, JsonType } from '../xml/tree.js';
 export type JsonValue =
   | null
@@ -63,8 +63,16 @@ function primitive(value: string, type: JsonType, numbers: JsonOptions['numbers'
   }
   return number;
 }
-/** Serializes the same instance used for XML. Collisions fail instead of overwriting data. */
-export function toJson(root: InstanceElement, options: JsonOptions = {}): JsonValue {
+/**
+ * Serializes the same instance used for XML. Collisions fail instead of overwriting data.
+ *
+ * @param prefixes - the preferred prefixes of the XML, so that mixed content uses the same ones
+ */
+export function toJson(
+  root: InstanceElement,
+  options: JsonOptions = {},
+  prefixes?: ReadonlyMap<string, string>,
+): JsonValue {
   if (options.mode === 'tree') {
     return JSON.parse(JSON.stringify(root)) as JsonValue;
   }
@@ -72,27 +80,75 @@ export function toJson(root: InstanceElement, options: JsonOptions = {}): JsonVa
   if (!textProperty) {
     throw new TypeError('textProperty must not be empty');
   }
-  const visit = (node: InstanceElement): JsonValue => {
-    const children = node.children.filter((child): child is InstanceElement => child.kind === 'element');
-    const texts = node.children.filter((child): child is InstanceText => child.kind === 'text');
-    if (!node.mixed && node.attributes.length === 0 && children.length === 0 && texts.length > 0) {
-      return primitive(texts.map((part) => part.value).join(''), texts[0]?.type ?? 'string', options.numbers);
-    }
-    const result: {
-      [key: string]: JsonValue;
-    } = Object.create(null) as {
-      [key: string]: JsonValue;
-    };
+  let plan: NamespacePlan | undefined;
+  type JsonObject = { [key: string]: JsonValue };
+  type Put = (name: string, identity: string, value: JsonValue) => void;
+  const object = (owner: string): { result: JsonObject; put: Put } => {
+    const result = Object.create(null) as JsonObject;
     const names = new Map<string, string>();
-    const put = (name: string, identity: string, value: JsonValue): void => {
+    const put: Put = (name, identity, value) => {
       if (names.has(name)) {
         throw new JsonMappingError(
-          `property collision at ${node.name}/${name}: ${names.get(name)} and ${identity}; use mode: 'tree'`,
+          `property collision at ${owner}/${name}: ${names.get(name)} and ${identity}; use mode: 'tree'`,
         );
       }
       names.set(name, identity);
       Object.defineProperty(result, name, { value, enumerable: true, writable: true, configurable: true });
     };
+    return { result, put };
+  };
+  /** Writes elements into one object; each repeated group at this level is an array with an object per occurrence. */
+  const writeElements = (owner: string, put: Put, members: readonly InstanceElement[], level: number): void => {
+    const properties = new Map<string, InstanceElement[]>();
+    for (const child of members) {
+      const group = child.groups?.[level];
+      const key = group?.key ?? child.name;
+      const list = properties.get(key) ?? [];
+      if (!group && list.some((item) => item.ns !== child.ns)) {
+        throw new JsonMappingError(`namespace collision at ${owner}/${child.name}; use mode: 'tree'`);
+      }
+      list.push(child);
+      properties.set(key, list);
+    }
+    for (const [key, list] of properties) {
+      const first = list[0];
+      if (!first) {
+        continue;
+      }
+      if (first.groups?.[level]) {
+        const occurrences = new Map<number, InstanceElement[]>();
+        for (const child of list) {
+          const id = child.groups?.[level]?.occurrence ?? 0;
+          occurrences.set(id, [...(occurrences.get(id) ?? []), child]);
+        }
+        const items = [...occurrences.values()].map((occurrence) => {
+          const item = object(owner);
+          writeElements(owner, item.put, occurrence, level + 1);
+          return item.result;
+        });
+        put(key, `repeated group ${key}`, items);
+      } else {
+        put(
+          key,
+          `element {${first.ns}}${key}`,
+          list.length > 1 || list.some((child) => child.repeatable) ? list.map(visit) : visit(first),
+        );
+      }
+    }
+  };
+  const visit = (node: InstanceElement): JsonValue => {
+    const children = node.children.filter((child): child is InstanceElement => child.kind === 'element');
+    const texts = node.children.filter((child): child is InstanceText => child.kind === 'text');
+    if (
+      !node.mixed &&
+      !node.simpleContent &&
+      node.attributes.length === 0 &&
+      children.length === 0 &&
+      texts.length > 0
+    ) {
+      return primitive(texts.map((part) => part.value).join(''), texts[0]?.type ?? 'string', options.numbers);
+    }
+    const { result, put } = object(node.name);
     for (const attribute of node.attributes) {
       put(
         attribute.name,
@@ -101,34 +157,10 @@ export function toJson(root: InstanceElement, options: JsonOptions = {}): JsonVa
       );
     }
     if (node.mixed) {
-      const content = node.children
-        .map((child) =>
-          child.kind === 'text'
-            ? escapeText(child.value)
-            : serializeXml(child, { declaration: false, indent: '' }).trimEnd(),
-        )
-        .join('');
-      put(textProperty, 'mixed content', content);
+      plan ??= planNamespaces(root, prefixes);
+      put(textProperty, 'mixed content', serializeMixed(node, plan));
     } else {
-      const groups = new Map<string, InstanceElement[]>();
-      for (const child of children) {
-        const list = groups.get(child.name) ?? [];
-        if (list.some((item) => item.ns !== child.ns)) {
-          throw new JsonMappingError(`namespace collision at ${node.name}/${child.name}; use mode: 'tree'`);
-        }
-        list.push(child);
-        groups.set(child.name, list);
-      }
-      for (const [name, group] of groups) {
-        const first = group[0];
-        if (first) {
-          put(
-            name,
-            `element {${first.ns}}${name}`,
-            group.length > 1 || group.some((child) => child.repeatable) ? group.map(visit) : visit(first),
-          );
-        }
-      }
+      writeElements(node.name, put, children, 0);
       if (texts.length > 0) {
         put(
           textProperty,
