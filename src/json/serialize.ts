@@ -39,6 +39,9 @@ function primitive(value: string, type: JsonType, numbers: JsonOptions['numbers'
   if (type === 'string' || (numbers === 'string' && (type === 'integer' || type === 'number'))) {
     return value;
   }
+  if (value === '') {
+    throw new JsonMappingError(`an empty value has no JSON ${type} form; use mode: 'tree'`);
+  }
   if (type === 'boolean') {
     if (value === 'true' || value === '1') {
       return true;

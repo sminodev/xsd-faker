@@ -71,6 +71,15 @@ describe('FacetReader', () => {
     expect(facets.members?.[1]?.item?.builtin).toBe('int');
   });
 
+  it('reads the built-in list types as lists of their item type', () => {
+    const { facets } = facetsOf(
+      `<xs:simpleType name="T"><xs:restriction base="xs:NMTOKENS"><xs:maxLength value="5"/></xs:restriction></xs:simpleType>`,
+      'T',
+    );
+    expect(facets).toMatchObject({ builtin: 'NMTOKENS', variety: 'list', minLength: 1, maxLength: 5 });
+    expect(facets.item?.builtin).toBe('NMTOKEN');
+  });
+
   it('reports unknown types, invalid facets and circles', () => {
     expect(
       facetsOf(`<xs:simpleType name="A"><xs:restriction base="Missing"/></xs:simpleType>`, 'A').problems[0]?.code,
@@ -98,5 +107,19 @@ describe('jsonTypeOf', () => {
     expect(jsonTypeOf(atomic('decimal', { fractionDigits: 0 }))).toBe('integer');
     expect(jsonTypeOf(atomic('boolean'))).toBe('boolean');
     expect(jsonTypeOf(atomic('date'))).toBe('string');
+  });
+
+  it('keeps a union of integers and numbers numeric', () => {
+    const atomic = (builtin: string) => ({ builtin, variety: 'atomic' as const, patterns: [] });
+    const union = (...members: string[]) => ({
+      builtin: 'anySimpleType',
+      variety: 'union' as const,
+      patterns: [],
+      members: members.map(atomic),
+    });
+    expect(jsonTypeOf(union('integer', 'decimal'))).toBe('number');
+    expect(jsonTypeOf(union('int', 'long'))).toBe('integer');
+    expect(jsonTypeOf(union('integer', 'date'))).toBe('string');
+    expect(jsonTypeOf(union())).toBe('string');
   });
 });

@@ -78,8 +78,45 @@ function checkNumber(facets: Facets, value: string): string | undefined {
   return undefined;
 }
 
+// libxml2 turns spaces, quotes, braces and a few other characters into `_` before it parses a URI; the rest has to be
+// a URI reference (RFC 3986), without the brackets of IP literals.
+const URI_PART = /^(?:[\w\-.~:/?@!$&'()*+,;= <>"{}|\\^`\u0080-\u{10FFFF}]|%[0-9A-Fa-f]{2})*$/u;
+
+function isUriReference(value: string): boolean {
+  const scheme = /^[A-Za-z][A-Za-z0-9+.-]*:/.exec(value)?.[0] ?? '';
+  const rest = value.slice(scheme.length);
+  // Without a scheme, a colon in the first segment would make that segment look like one.
+  if (scheme === '' && /^[^/?#]*:/.test(rest)) {
+    return false;
+  }
+  const [main = '', ...fragment] = rest.split('#');
+  return fragment.length <= 1 && URI_PART.test(main) && URI_PART.test(fragment[0] ?? '');
+}
+
+/** The whiteSpace rule of a type without its own facet: lists collapse, unions leave it to their members. */
+function defaultWhiteSpace(facets: Facets): 'preserve' | 'replace' | 'collapse' {
+  if (facets.variety === 'list') {
+    return 'collapse';
+  }
+  if (facets.variety === 'union' || facets.builtin === 'string' || facets.builtin === 'anySimpleType') {
+    return 'preserve';
+  }
+  return facets.builtin === 'normalizedString' ? 'replace' : 'collapse';
+}
+
+/** The value as a validator sees it, after the whiteSpace rule of its type. */
+export function normalizeSpace(facets: Facets, value: string): string {
+  const mode = facets.whiteSpace ?? defaultWhiteSpace(facets);
+  if (mode === 'preserve') {
+    return value;
+  }
+  const replaced = value.replace(/[\t\n\r]/g, ' ');
+  return mode === 'replace' ? replaced : replaced.replace(/ +/g, ' ').trim();
+}
+
 /** Why `value` is not allowed by `facets`, or undefined if it is. */
 export function checkValue(facets: Facets, value: string): string | undefined {
+  value = normalizeSpace(facets, value);
   if (facets.enumeration !== undefined && !facets.enumeration.includes(value)) {
     return 'is not one of the enumerated values';
   }
@@ -107,7 +144,7 @@ export function checkValue(facets: Facets, value: string): string | undefined {
     return undefined;
   }
   const lexical = lexicalRegExp(facets.builtin);
-  if (lexical && !lexical.test(value)) {
+  if ((lexical && !lexical.test(value)) || (facets.builtin === 'anyURI' && !isUriReference(value))) {
     return `is not a valid xs:${facets.builtin}`;
   }
   if (isNumeric(facets.builtin)) {

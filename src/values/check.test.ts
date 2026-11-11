@@ -39,6 +39,13 @@ describe('checkValue', () => {
     ['boolean', atomic('boolean'), '1'],
     ['list', { builtin: 'string', variety: 'list', patterns: [], item: atomic('int'), maxLength: 3 }, '1 2 3'],
     [
+      'list with extra spaces',
+      { builtin: 'string', variety: 'list', patterns: [['\\d( \\d)*']], item: atomic('int') },
+      ' 1  2 ',
+    ],
+    ['anyURI', atomic('anyURI'), 'https://example.org/a?b=c#d'],
+    ['anyURI with characters libxml2 replaces', atomic('anyURI'), 'a b<c>'],
+    [
       'union',
       { builtin: 'anySimpleType', variety: 'union', patterns: [], members: [atomic('date'), atomic('boolean')] },
       'true',
@@ -59,6 +66,11 @@ describe('checkValue', () => {
     ['integer lexical form', atomic('int'), '1e3'],
     ['date in February', atomic('date'), '2023-02-29'],
     ['list item', { builtin: 'string', variety: 'list', patterns: [], item: atomic('int') }, '1 x'],
+    ['anyURI with a bracket', atomic('anyURI'), 'a]b'],
+    ['anyURI with a broken escape', atomic('anyURI'), 'a%zz'],
+    ['anyURI with two fragments', atomic('anyURI'), 'a#b#c'],
+    ['anyURI with a colon in the first segment', atomic('anyURI'), '1a:b'],
+    ['pattern after collapsing', atomic('token', { patterns: [['A {2}B']] }), 'A  B'],
     [
       'union',
       { builtin: 'anySimpleType', variety: 'union', patterns: [], members: [atomic('date'), atomic('boolean')] },

@@ -118,6 +118,71 @@ test('one occurrence of a repeated group remains an array in JSON', async () => 
   assert.ok(Array.isArray(sample.json.Code));
   assert.equal(sample.json.Code.length, 1);
 });
+test('a union of integers and decimals is a number', async () => {
+  const sample = await generated(
+    '<xs:simpleType name="U"><xs:union memberTypes="xs:integer xs:decimal"/></xs:simpleType><xs:element name="R" type="U"/>',
+  );
+  okay(sample);
+  assert.equal(typeof sample.json, 'number');
+});
+for (const type of ['long', 'unsignedLong'])
+  test(`xs:${type} has JSON by default`, async () => {
+    const body = `<xs:element name="R" type="xs:${type}"/>`;
+    for (let seed = 1; seed <= 40; seed += 1) {
+      const sample = await generated(body, { seed });
+      okay(sample);
+      assert.equal(sample.jsonStatus, 'generated');
+      assert.ok(Number.isSafeInteger(sample.json));
+    }
+  });
+for (const [min, max] of [
+  ['0.123', '0.124'],
+  ['0.123456', '0.123457'],
+])
+  test(`decimal bounds ${min}..${max} get the fraction digits they need`, async () => {
+    for (let seed = 1; seed <= 10; seed += 1) {
+      const sample = await generated(
+        `<xs:element name="R"><xs:simpleType><xs:restriction base="xs:decimal"><xs:minInclusive value="${min}"/><xs:maxInclusive value="${max}"/></xs:restriction></xs:simpleType></xs:element>`,
+        { seed },
+      );
+      okay(sample);
+      assert.equal(sample.jsonStatus, 'generated');
+    }
+  });
+test('a missing value is not reported as a rounding problem', async () => {
+  const sample = await generated(
+    '<xs:element name="R"><xs:simpleType><xs:restriction base="xs:decimal"><xs:fractionDigits value="1"/><xs:minInclusive value="0.123"/><xs:maxInclusive value="0.124"/></xs:restriction></xs:simpleType></xs:element>',
+  );
+  assert.equal(sample.status, 'incomplete');
+  assert.ok(sample.problems.some((p) => p.code === 'no-value'));
+  assert.ok(!sample.problems.some((p) => /without changing its decimal value/.test(p.message)));
+});
+for (const [facet, value, tokens] of [
+  ['maxLength', 5, (n) => n >= 1 && n <= 5],
+  ['length', 2, (n) => n === 2],
+  ['length', 11, (n) => n === 11],
+  ['minLength', 3, (n) => n >= 3],
+])
+  test(`xs:NMTOKENS ${facet}=${value} counts items`, async () => {
+    const sample = await generated(
+      `<xs:element name="R"><xs:simpleType><xs:restriction base="xs:NMTOKENS"><xs:${facet} value="${value}"/></xs:restriction></xs:simpleType></xs:element>`,
+    );
+    okay(sample);
+    assert.ok(tokens(sample.json.split(' ').length), sample.json);
+  });
+for (const [facet, value, length] of [
+  ['maxLength', 10, (n) => n <= 10],
+  ['minLength', 30, (n) => n >= 30],
+  ['length', 15, (n) => n === 15],
+  ['length', 26, (n) => n === 26],
+])
+  test(`xs:anyURI respects ${facet}=${value}`, async () => {
+    const sample = await generated(
+      `<xs:element name="R"><xs:simpleType><xs:restriction base="xs:anyURI"><xs:${facet} value="${value}"/></xs:restriction></xs:simpleType></xs:element>`,
+    );
+    okay(sample);
+    assert.ok(length(sample.json.length), sample.json);
+  });
 const common = 'xmlns:c="urn:common"';
 const refElement = (decl) =>
   `<xs:element name="R"><xs:complexType><xs:sequence>${decl}</xs:sequence></xs:complexType></xs:element>`;
@@ -146,6 +211,16 @@ test('a QName attribute value declares its prefix', async () => {
   );
   okay(sample);
   assert.match(sample.xml, /xmlns:c="urn:common"/);
+});
+test('a pattern on a union is met', async () => {
+  for (let seed = 1; seed <= 10; seed += 1) {
+    const sample = await generated(
+      '<xs:simpleType name="U"><xs:union memberTypes="xs:string xs:integer"/></xs:simpleType><xs:simpleType name="P"><xs:restriction base="U"><xs:pattern value="[A-Z]{3}"/></xs:restriction></xs:simpleType><xs:element name="R" type="P"/>',
+      { seed },
+    );
+    okay(sample);
+    assert.match(sample.json, /^[A-Z]{3}$/);
+  }
 });
 test('choice first and preferred choose a single branch', async () => {
   const a = await generated(choice);

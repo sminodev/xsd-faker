@@ -11,6 +11,7 @@ const atomic = (builtin: string, extra: Partial<Facets> = {}): Facets => ({
   ...extra,
 });
 const bound = (value: number, exclusive = false) => ({ value, exclusive });
+const decimal = (lexical: string, exclusive = false) => ({ value: Number(lexical), lexical, exclusive });
 
 const CASES: [string, Facets][] = [
   ['string', atomic('string')],
@@ -41,6 +42,27 @@ const CASES: [string, Facets][] = [
   ['NCName', atomic('NCName')],
   ['list', { builtin: 'string', variety: 'list', patterns: [], item: atomic('int', { min: bound(0), max: bound(9) }) }],
   ['union', { builtin: 'anySimpleType', variety: 'union', patterns: [], members: [atomic('date'), atomic('boolean')] }],
+  [
+    'pattern on a union',
+    {
+      builtin: 'anySimpleType',
+      variety: 'union',
+      patterns: [['[A-Z]{3}']],
+      members: [atomic('string'), atomic('integer')],
+    },
+  ],
+  ['pattern on a list', { builtin: 'string', variety: 'list', patterns: [['[0-9 ]{5}']], item: atomic('int') }],
+  ['pattern on a duration', atomic('duration', { patterns: [['.+']] })],
+  ['pattern on a gDay', atomic('gDay', { patterns: [['.+']] })],
+  ['pattern on an NCName', atomic('NCName', { patterns: [['.+']] })],
+  ['anyURI with a pattern', atomic('anyURI', { patterns: [['.+']], length: 34 })],
+  ['token with a pattern', atomic('token', { patterns: [['.+']] })],
+  ['anyURI with maxLength', atomic('anyURI', { maxLength: 10 })],
+  ['anyURI with minLength', atomic('anyURI', { minLength: 40 })],
+  ['anyURI with length', atomic('anyURI', { length: 15 })],
+  ['narrow decimal', atomic('decimal', { min: decimal('0.123'), max: decimal('0.124') })],
+  ['very narrow decimal', atomic('decimal', { min: decimal('0.1234567'), max: decimal('0.1234568') })],
+  ['exclusive decimal', atomic('decimal', { min: decimal('0.1', true), max: decimal('0.2', true) })],
 ];
 
 describe('generateValue', () => {
@@ -52,6 +74,19 @@ describe('generateValue', () => {
     }
   });
 
+  it('writes a union value as the member that accepts it reads it', () => {
+    const union: Facets = {
+      builtin: 'anySimpleType',
+      variety: 'union',
+      patterns: [['[A-Z]{2} ?']],
+      members: [atomic('NCName')],
+    };
+    for (let seed = 1; seed <= 50; seed += 1) {
+      const value = generateValue(union, createRng(seed));
+      expect(value, `seed ${seed}`).toMatch(/^[A-Z]{2}$/);
+    }
+  });
+
   it('is deterministic for a seed', () => {
     const facets = atomic('decimal', { totalDigits: 6, fractionDigits: 2 });
     expect(generateValue(facets, createRng(3))).toBe(generateValue(facets, createRng(3)));
@@ -60,10 +95,30 @@ describe('generateValue', () => {
   it('gives up on facets no value can meet', () => {
     expect(generateValue(atomic('int', { min: bound(5), max: bound(4) }), createRng(1))).toBeUndefined();
     expect(generateValue(atomic('string', { patterns: [['\\d{3}']], maxLength: 2 }), createRng(1))).toBeUndefined();
+    const tooFewDigits = atomic('decimal', { min: decimal('0.123'), max: decimal('0.124'), fractionDigits: 2 });
+    expect(generateValue(tooFewDigits, createRng(1))).toBeUndefined();
   });
 });
 
 describe('numberCandidate', () => {
+  it('stays where a JSON number is exact when the bounds allow it', () => {
+    const long = atomic('long', {
+      min: decimal('-9223372036854775808'),
+      max: decimal('9223372036854775807'),
+    });
+    const wide = atomic('decimal', { min: decimal('-1e30'), max: decimal('1e30') });
+    for (let seed = 1; seed <= 200; seed += 1) {
+      expect(Number.isSafeInteger(Number(numberCandidate(long, createRng(seed))))).toBe(true);
+      const value = numberCandidate(wide, createRng(seed)) as string;
+      expect(value.replace(/[-.]/g, '').replace(/^0+/, '').length).toBeLessThanOrEqual(15);
+    }
+  });
+
+  it('leaves that range when the bounds demand it', () => {
+    const huge = atomic('long', { min: decimal('9223372036854775806'), max: decimal('9223372036854775807') });
+    expect(['9223372036854775806', '9223372036854775807']).toContain(numberCandidate(huge, createRng(1)));
+  });
+
   it('stays within totalDigits for every scale', () => {
     const facets = atomic('decimal', { totalDigits: 3, fractionDigits: 2 });
     for (let seed = 1; seed <= 200; seed += 1) {

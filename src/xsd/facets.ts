@@ -34,6 +34,8 @@ export interface Facets {
   fractionDigits?: number;
   /** A non-numeric bound that still requires final validator checks. */
   unsupportedBounds?: boolean;
+  /** The whiteSpace facet; without it, the built-in type decides. */
+  whiteSpace?: 'preserve' | 'replace' | 'collapse';
   /** The item type of a list. */
   item?: Facets;
   /** The member types of a union. */
@@ -63,6 +65,8 @@ export const INTEGERS: Readonly<Record<string, { min?: number; max?: number }>> 
 };
 
 const NUMBERS = ['decimal', 'float', 'double'];
+/** Built-in list types and their item types; their length facets count items. */
+const LISTS: Readonly<Record<string, string>> = { NMTOKENS: 'NMTOKEN', IDREFS: 'IDREF', ENTITIES: 'ENTITY' };
 const OTHER_BUILTINS = [
   'anySimpleType',
   'anyType',
@@ -108,7 +112,11 @@ export function isKnownBuiltin(local: string): boolean {
 export function jsonTypeOf(facets: Facets): 'integer' | 'number' | 'boolean' | 'string' {
   if (facets.variety === 'union') {
     const types = new Set((facets.members ?? []).map(jsonTypeOf));
-    return types.size === 1 ? ([...types][0] ?? 'string') : 'string';
+    if (types.size === 1) {
+      return [...types][0] ?? 'string';
+    }
+    // Integers are numbers too, so such a union can stay numeric.
+    return types.size > 1 && [...types].every((type) => type === 'integer' || type === 'number') ? 'number' : 'string';
   }
   if (facets.variety === 'list') {
     return 'string';
@@ -231,6 +239,10 @@ export class FacetReader {
 
   /** A built-in type, with the value range of the integer types. */
   private builtin(local: string): Facets {
+    const item = LISTS[local];
+    if (item !== undefined) {
+      return { builtin: local, variety: 'list', patterns: [], minLength: 1, item: this.builtin(item) };
+    }
     const facets: Facets = { builtin: local, variety: 'atomic', patterns: [] };
     const range = INTEGERS[local];
     if (range?.min !== undefined) {
@@ -329,6 +341,9 @@ export class FacetReader {
         return;
       }
       case 'whiteSpace':
+        if (value === 'preserve' || value === 'replace' || value === 'collapse') {
+          facets.whiteSpace = value;
+        }
         return;
       default:
         this.problems.error('unsupported', `facet xs:${name} is not supported`, this.at(node));

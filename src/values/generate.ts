@@ -5,10 +5,17 @@ import { RegexSyntaxError } from '../regex/parse.js';
 import { stringFromPattern, UngeneratableError } from '../regex/generate.js';
 import type { Rng } from '../rng.js';
 import { type Facets, INTEGERS, isNumeric } from '../xsd/facets.js';
-import { boundUnits } from './decimal.js';
-import { checkValue } from './check.js';
+import { boundUnits, decimalParts } from './decimal.js';
+import { checkValue, normalizeSpace } from './check.js';
+import { lexicalRegExp } from './lexical.js';
 
 const ATTEMPTS = 100;
+/** The usual form of a generated xs:anyURI, and its length with six letters at the end. */
+const URI_BASE = 'https://example.org/';
+const URI_LENGTH = URI_BASE.length + 6;
+/** Numbers a JSON document holds exactly: all safe integers, and decimals of at most 15 significant digits. */
+const EXACT_INTEGER = BigInt(Number.MAX_SAFE_INTEGER);
+const EXACT_DECIMAL = 10n ** 15n - 1n;
 const LETTERS = 'abcdefghijklmnopqrstuvwxyz';
 const pad = (n: number, width = 2) => String(n).padStart(width, '0');
 
@@ -20,7 +27,9 @@ export function generateValue(facets: Facets, rng: Rng): string | undefined {
     return undefined;
   if (facets.enumeration?.length === 0) return undefined;
   for (let attempt = 0; attempt < ATTEMPTS; attempt += 1) {
-    const value = candidate(facets, rng);
+    const raw = candidate(facets, rng);
+    // The value as the validator reads it, so that XML and JSON carry the same value.
+    const value = raw === undefined ? undefined : settled(facets, normalizeSpace(facets, raw));
     if (value !== undefined && checkValue(facets, value) === undefined) {
       return value;
     }
@@ -28,10 +37,23 @@ export function generateValue(facets: Facets, rng: Rng): string | undefined {
   return undefined;
 }
 
+/** A union value in the form the member that accepts it reads; unions have no whiteSpace rule of their own. */
+function settled(facets: Facets, value: string): string {
+  if (facets.variety !== 'union') {
+    return value;
+  }
+  const member = (facets.members ?? []).find((m) => checkValue(m, value) === undefined);
+  return member ? settled(member, normalizeSpace(member, value)) : value;
+}
+
 /** One candidate; it may still break a facet. */
 function candidate(facets: Facets, rng: Rng): string | undefined {
   if (facets.enumeration !== undefined) {
     return rng.pick(facets.enumeration);
+  }
+  // Patterns on a union or list apply to the whole value; its members or items alone may not meet them.
+  if (facets.variety !== 'atomic' && facets.patterns.length > 0 && rng.chance(0.5)) {
+    return patternCandidate(facets, rng);
   }
   if (facets.variety === 'union') {
     const members = facets.members ?? [];
@@ -48,7 +70,7 @@ function candidate(facets: Facets, rng: Rng): string | undefined {
 }
 
 function hasLexicalForm(builtin: string): boolean {
-  return isNumeric(builtin) || ['boolean', 'date', 'dateTime', 'time', 'gYear', 'gYearMonth'].includes(builtin);
+  return lexicalRegExp(builtin) !== undefined || builtin === 'anyURI';
 }
 
 function patternCandidate(facets: Facets, rng: Rng): string | undefined {
@@ -148,7 +170,7 @@ function builtinCandidate(facets: Facets, rng: Rng): string | undefined {
     case 'base64Binary':
       return btoa(String.fromCharCode(...bytes(rng, lengthFor(facets, rng, 12))));
     case 'anyURI':
-      return `https://example.org/${word(rng, 6).toLowerCase()}`;
+      return uriCandidate(facets, rng);
     case 'language':
       return rng.pick(['de', 'en', 'fr', 'de-DE', 'en-GB']);
     case 'QName':
@@ -159,14 +181,22 @@ function builtinCandidate(facets: Facets, rng: Rng): string | undefined {
     case 'ENTITY':
     case 'NMTOKEN':
       return word(rng, lengthFor(facets, rng, 8));
-    case 'NMTOKENS':
-    case 'IDREFS':
-    case 'ENTITIES':
-      return `${word(rng, 5)} ${word(rng, 5)}`;
     default:
       // string, normalizedString, token, anySimpleType and the rest: readable letters
       return word(rng, lengthFor(facets, rng, 10));
   }
+}
+
+/** An absolute URI if the length facets allow one; a relative reference, which is a plain word, otherwise. */
+function uriCandidate(facets: Facets, rng: Rng): string {
+  const fits =
+    facets.length === undefined &&
+    (facets.minLength ?? 0) <= URI_LENGTH &&
+    (facets.maxLength ?? URI_LENGTH) >= URI_LENGTH;
+  const length = fits ? URI_LENGTH : lengthFor(facets, rng, URI_LENGTH);
+  return length > URI_BASE.length
+    ? `${URI_BASE}${word(rng, length - URI_BASE.length).toLowerCase()}`
+    : word(rng, length).toLowerCase();
 }
 
 /** Formats `units * 10^-scale` as a decimal number without exponent, for example 12345 and 2 as 123.45. */
@@ -182,7 +212,30 @@ export function formatScaled(units: number, scale: number): string {
  */
 export function numberCandidate(facets: Facets, rng: Rng): string | undefined {
   const integer = INTEGERS[facets.builtin] !== undefined || facets.fractionDigits === 0;
-  const scale = integer ? 0 : rng.int(0, Math.min(facets.fractionDigits ?? 2, 4));
+  const first = integer ? 0 : rng.int(0, Math.min(facets.fractionDigits ?? 2, 4));
+  // Narrow bounds can need more fraction digits than the chosen scale has.
+  const last = integer ? first : Math.max(first, Math.min(facets.fractionDigits ?? Infinity, scaleBetween(facets)));
+  for (let scale = first; scale <= last; scale += 1) {
+    const range = unitRange(facets, scale, integer);
+    if (range === undefined) {
+      return undefined;
+    }
+    if (range.low <= range.high) {
+      return formatUnits(range.low, range.high, scale, rng);
+    }
+  }
+  return undefined;
+}
+
+/** Enough fraction digits to name a value between the bounds, however close they are. */
+function scaleBetween({ min, max }: Facets): number {
+  const scaleOf = (bound: Facets['min']) =>
+    bound ? Math.max(0, decimalParts(bound.lexical ?? String(bound.value))?.scale ?? 0) : 0;
+  return Math.max(scaleOf(min), scaleOf(max)) + 1;
+}
+
+/** The whole units of `10^-scale` that the facets allow. */
+function unitRange(facets: Facets, scale: number, integer: boolean): { low: bigint; high: bigint } | undefined {
   const factor = 10n ** BigInt(scale);
   const min = facets.min,
     max = facets.max;
@@ -197,7 +250,16 @@ export function numberCandidate(facets: Facets, rng: Rng): string | undefined {
     low = low < -limit ? -limit : low;
     high = high > limit ? limit : high;
   }
-  if (low > high) return undefined;
+  // Stay where a JSON number is exact, if the bounds reach that far.
+  const exact = integer ? EXACT_INTEGER : EXACT_DECIMAL;
+  if (low <= exact && high >= -exact) {
+    low = low < -exact ? -exact : low;
+    high = high > exact ? exact : high;
+  }
+  return { low, high };
+}
+
+function formatUnits(low: bigint, high: bigint, scale: number, rng: Rng): string {
   const span = high - low + 1n;
   const safe = BigInt(Number.MAX_SAFE_INTEGER);
   const units =
