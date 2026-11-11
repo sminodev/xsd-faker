@@ -11,12 +11,14 @@ export type XmlValidator = (schema: SchemaFiles, documents: readonly string[]) =
 export class SchemaCompileError extends Error {
   override name = 'SchemaCompileError';
 }
+/** The default of 32 MiB is too small for documents that `maxNodes` allows. */
+const MAX_MEMORY_GIB = 2;
 /** Each document has its own verdict; an unclassified validator error can never turn into success. */
 export async function validateXml(schema: SchemaFiles, documents: readonly string[]): Promise<Verdict[]> {
   if (documents.length === 0) {
     return [];
   }
-  const { validateXML } = await import('xmllint-wasm');
+  const { validateXML, memoryPages } = await import('xmllint-wasm');
   const verdicts: Verdict[] = [];
   for (const [index, contents] of documents.entries()) {
     try {
@@ -26,6 +28,7 @@ export async function validateXml(schema: SchemaFiles, documents: readonly strin
         preload: [...schema.files]
           .filter(([path]) => path !== schema.entry)
           .map(([fileName, source]) => ({ fileName, contents: source })),
+        maxMemoryPages: MAX_MEMORY_GIB * memoryPages.GiB,
       });
       const errors = result.errors.map((error) => error.message || error.rawMessage);
       if (!result.valid && errors.length === 0) {
