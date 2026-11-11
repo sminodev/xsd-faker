@@ -9,7 +9,7 @@ import type { Rng } from '../rng.js';
 import type { ValueSource } from '../values/source.js';
 import { generateValue } from '../values/generate.js';
 import { element, type InstanceAttribute, type InstanceElement, type InstanceNode, text } from '../xml/tree.js';
-import { FacetReader, type Facets, jsonTypeOf } from '../xsd/facets.js';
+import { enumerationScope, FacetReader, type Facets, holdsQNames, jsonTypeOf } from '../xsd/facets.js';
 import type { Problems } from '../xsd/problems.js';
 import {
   attr,
@@ -202,22 +202,39 @@ export class Walker {
       const qname = this.set.resolveQName(decl, typeName);
       const complex = qname.ns === XS ? undefined : this.set.lookup('complexType', qname);
       if (complex) {
-        this.complex(out, complex.node, complex.doc, here, depth, fixed);
+        this.complex(out, complex.node, complex.doc, here, depth, fixed, decl);
       } else if (!(qname.ns === XS && qname.local === 'anyType')) {
-        this.simpleText(out, this.facets.read(qname, decl), here, fixed);
+        this.simpleText(out, this.facets.read(qname, decl), here, fixed, decl);
       }
     } else if (anonymousComplex) {
-      this.complex(out, anonymousComplex, declDoc, here, depth, fixed);
+      this.complex(out, anonymousComplex, declDoc, here, depth, fixed, decl);
     } else if (anonymousSimple) {
-      this.simpleText(out, this.facets.read(anonymousSimple), here, fixed);
+      this.simpleText(out, this.facets.read(anonymousSimple), here, fixed, decl);
     }
     return out;
   }
 
-  private simpleText(out: InstanceElement, facets: Facets, path: readonly string[], fixed: string | undefined): void {
+  private simpleText(
+    out: InstanceElement,
+    facets: Facets,
+    path: readonly string[],
+    fixed: string | undefined,
+    decl: Element,
+  ): void {
     this.identityBoundary(facets);
     const value = fixed ?? this.value(facets, path, 'element');
+    this.bindPrefixes(out, facets, value, fixed === undefined ? (enumerationScope(facets, value) ?? decl) : decl);
     out.children = [text(value, jsonTypeOf(facets))];
+  }
+
+  /** The prefixes in a QName value need a declaration in the document; the schema says what they stand for. */
+  private bindPrefixes(out: InstanceElement, facets: Facets, value: string, scope: Element): void {
+    if (!holdsQNames(facets)) return;
+    for (const token of value.trim().split(/\s+/)) {
+      const prefix = token.slice(0, Math.max(token.indexOf(':'), 0));
+      const ns = prefix !== '' && prefix !== 'xml' ? scope.lookupNamespaceURI(prefix) : null;
+      if (ns) out.valueNamespaces = { ...out.valueNamespaces, [prefix]: ns };
+    }
   }
 
   private identityBoundary(facets: Facets): void {
@@ -253,11 +270,12 @@ export class Walker {
     path: readonly string[],
     depth: number,
     fixed: string | undefined,
+    decl: Element,
   ): void {
     const plan = this.plan(typeNode, doc);
-    out.attributes = this.attributes(plan.attributes, path, depth);
+    out.attributes = this.attributes(out, plan.attributes, path, depth);
     if (plan.simple) {
-      this.simpleText(out, plan.simple, path, fixed);
+      this.simpleText(out, plan.simple, path, fixed, decl);
       return;
     }
     const children: InstanceNode[] = [];
@@ -386,7 +404,12 @@ export class Walker {
     }
   }
 
-  private attributes(uses: Map<string, AttributeUse>, path: readonly string[], depth: number): InstanceAttribute[] {
+  private attributes(
+    owner: InstanceElement,
+    uses: Map<string, AttributeUse>,
+    path: readonly string[],
+    depth: number,
+  ): InstanceAttribute[] {
     const out: InstanceAttribute[] = [];
     for (const use of uses.values()) {
       if (attr(use.node, 'use') !== 'required' && !this.includeOptional(depth, 'attribute')) {
@@ -419,6 +442,9 @@ export class Walker {
         attr(use.node, 'fixed') ?? attr(decl, 'fixed') ?? attr(use.node, 'default') ?? attr(decl, 'default');
       this.identityBoundary(facets);
       const value = fixed ?? this.value(facets, [...path, name], 'attribute');
+      const constrained = attr(use.node, 'fixed') !== undefined || attr(use.node, 'default') !== undefined;
+      const scope = fixed === undefined ? (enumerationScope(facets, value) ?? decl) : constrained ? use.node : decl;
+      this.bindPrefixes(owner, facets, value, scope);
       out.push({ ns, name, value, type: jsonTypeOf(facets) });
     }
     return out;

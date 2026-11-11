@@ -20,6 +20,8 @@ export interface Facets {
   variety: 'atomic' | 'list' | 'union';
   /** The allowed values; the last restriction step with enumerations wins. */
   enumeration?: string[];
+  /** The restriction with those values; its namespaces say what prefixes in them stand for. */
+  enumerationNode?: Element;
   /** Raw XML Schema patterns, one array per restriction step: alternatives within a step, all steps apply. */
   patterns: string[][];
   length?: number;
@@ -118,6 +120,29 @@ export function jsonTypeOf(facets: Facets): 'integer' | 'number' | 'boolean' | '
     return 'number';
   }
   return facets.builtin === 'boolean' ? 'boolean' : 'string';
+}
+
+/** Whether the values of a type are or can contain QNames, whose prefixes the document has to declare. */
+export function holdsQNames(facets: Facets): boolean {
+  return (
+    ['QName', 'NOTATION'].includes(facets.builtin) ||
+    (facets.item !== undefined && holdsQNames(facets.item)) ||
+    (facets.members ?? []).some(holdsQNames)
+  );
+}
+
+/** The restriction that enumerates `value`, also in a member of a union. */
+export function enumerationScope(facets: Facets, value: string): Element | undefined {
+  if (facets.enumeration?.includes(value)) {
+    return facets.enumerationNode;
+  }
+  for (const member of facets.members ?? []) {
+    const node = enumerationScope(member, value);
+    if (node) {
+      return node;
+    }
+  }
+  return undefined;
 }
 
 /** The tighter of two bounds: for a lower bound the larger value, for an upper bound the smaller one. */
@@ -247,6 +272,7 @@ export class FacetReader {
     }
     if (values.length > 0) {
       out.enumeration = values;
+      out.enumerationNode = restriction;
     }
     return out;
   }

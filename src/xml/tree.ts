@@ -29,6 +29,8 @@ export interface InstanceElement {
   mixed?: boolean;
   /** the particle, or an enclosing model group, allows repeated occurrences */
   repeatable: boolean;
+  /** the prefixes of QName values in this element and its attributes, with their namespaces */
+  valueNamespaces?: Record<string, string>;
 }
 
 export type InstanceNode = InstanceElement | InstanceText;

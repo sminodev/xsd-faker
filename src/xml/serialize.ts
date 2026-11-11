@@ -1,4 +1,5 @@
-// Writes an instance tree as XML text. All namespace declarations go on the root element.
+// Writes an instance tree as XML text. Namespace declarations go on the root element, except those for prefixes in
+// QName values: these go on the element that holds the value, because the value has to keep its spelling.
 
 import { elements, type InstanceElement, type InstanceNode } from './tree.js';
 
@@ -43,6 +44,8 @@ export function planNamespaces(
       needPrefix.push(ns);
     }
   };
+  // A prefix in a QName value keeps its meaning, so no other namespace may take it.
+  const valuePrefixes = new Map<string, Set<string>>();
   for (const e of all) {
     if (e.ns !== defaultNs) {
       add(e.ns);
@@ -50,9 +53,17 @@ export function planNamespaces(
     for (const a of e.attributes) {
       add(a.ns);
     }
+    for (const [prefix, ns] of Object.entries(e.valueNamespaces ?? {})) {
+      valuePrefixes.set(prefix, (valuePrefixes.get(prefix) ?? new Set()).add(ns));
+      if (ns === XSI) {
+        add(ns);
+      }
+    }
   }
   const prefixes = new Map<string, string>();
   const used = new Set(['xml', 'xmlns', 'xsi']);
+  const taken = (prefix: string, ns: string) =>
+    used.has(prefix) || [...(valuePrefixes.get(prefix) ?? [])].some((other) => other !== ns);
   for (const ns of needPrefix) {
     if (ns === XML_NS) {
       prefixes.set(ns, 'xml');
@@ -63,9 +74,9 @@ export function planNamespaces(
       continue;
     }
     let prefix = preferred.get(ns);
-    if (prefix === undefined || used.has(prefix) || !/^[A-Za-z_][\w.-]*$/.test(prefix)) {
+    if (prefix === undefined || taken(prefix, ns) || !/^[A-Za-z_][\w.-]*$/.test(prefix)) {
       let n = 1;
-      while (used.has(`ns${n}`)) {
+      while (taken(`ns${n}`, ns)) {
         n += 1;
       }
       prefix = `ns${n}`;
@@ -88,16 +99,46 @@ export function escapeAttribute(value: string): string {
     .replace(/\r/g, '&#13;');
 }
 
-export function serializeXml(root: InstanceElement, options: SerializeOptions = {}): string {
-  const indent = options.indent ?? '  ';
-  const plan = planNamespaces(root, options.prefixes);
+/** Writes elements and text with the prefixes of a plan; `extra` are attributes for the first element. */
+function writer(plan: NamespacePlan, indent: string) {
   const qname = (ns: string, name: string, attribute: boolean): string => {
     if (ns === '' || (!attribute && ns === plan.defaultNs)) {
       return name;
     }
     return `${plan.prefixes.get(ns)}:${name}`;
   };
+  // Inside mixed content nothing is indented, so that the markup is the same as in the JSON form.
+  const write = (node: InstanceNode, depth: number, extra: string[], compact = false): string => {
+    if (node.kind === 'text') {
+      return escapeText(node.value);
+    }
+    const name = qname(node.ns, node.name, false);
+    const attributes = [
+      ...extra,
+      ...Object.entries(node.valueNamespaces ?? {})
+        .filter(([prefix, ns]) => plan.prefixes.get(ns) !== prefix)
+        .map(([prefix, ns]) => `xmlns:${prefix}="${escapeAttribute(ns)}"`),
+      ...node.attributes.map((a) => `${qname(a.ns, a.name, true)}="${escapeAttribute(a.value)}"`),
+    ];
+    const open = attributes.length > 0 ? `<${name} ${attributes.join(' ')}` : `<${name}`;
+    if (node.children.length === 0) {
+      return `${open}/>`;
+    }
+    // Text content is written as it is; only element-only content is indented.
+    const mixed = compact || node.children.some((c) => c.kind === 'text');
+    if (mixed || indent === '') {
+      return `${open}>${node.children.map((c) => write(c, depth + 1, [], mixed)).join('')}</${name}>`;
+    }
+    const inner = indent.repeat(depth + 1);
+    const children = node.children.map((c) => `\n${inner}${write(c, depth + 1, [])}`).join('');
+    return `${open}>${children}\n${indent.repeat(depth)}</${name}>`;
+  };
+  return write;
+}
 
+export function serializeXml(root: InstanceElement, options: SerializeOptions = {}): string {
+  const indent = options.indent ?? '  ';
+  const plan = planNamespaces(root, options.prefixes);
   const declarations: string[] = [];
   if (plan.defaultNs !== undefined) {
     declarations.push(`xmlns="${escapeAttribute(plan.defaultNs)}"`);
@@ -113,30 +154,44 @@ export function serializeXml(root: InstanceElement, options: SerializeOptions = 
         : `xsi:schemaLocation="${escapeAttribute(`${root.ns} ${options.schemaLocation}`)}"`,
     );
   }
-
-  const write = (node: InstanceNode, depth: number, extra: string[]): string => {
-    if (node.kind === 'text') {
-      return escapeText(node.value);
-    }
-    const name = qname(node.ns, node.name, false);
-    const attributes = [
-      ...extra,
-      ...node.attributes.map((a) => `${qname(a.ns, a.name, true)}="${escapeAttribute(a.value)}"`),
-    ];
-    const open = attributes.length > 0 ? `<${name} ${attributes.join(' ')}` : `<${name}`;
-    if (node.children.length === 0) {
-      return `${open}/>`;
-    }
-    // Text content is written as it is; only element-only content is indented.
-    const mixed = node.children.some((c) => c.kind === 'text');
-    if (mixed || indent === '') {
-      return `${open}>${node.children.map((c) => write(c, depth + 1, [])).join('')}</${name}>`;
-    }
-    const inner = indent.repeat(depth + 1);
-    const children = node.children.map((c) => `\n${inner}${write(c, depth + 1, [])}`).join('');
-    return `${open}>${children}\n${indent.repeat(depth)}</${name}>`;
-  };
-
-  const body = write(root, 0, declarations);
+  const body = writer(plan, indent)(root, 0, declarations);
   return options.declaration === false ? `${body}\n` : `<?xml version="1.0" encoding="UTF-8"?>\n${body}\n`;
+}
+
+/**
+ * Mixed content as one string of markup: the text, and the child elements with the prefixes of the document. Each
+ * child element declares the namespaces its names use, so that the string can be read on its own.
+ */
+export function serializeMixed(node: InstanceElement, plan: NamespacePlan): string {
+  const write = writer(plan, '');
+  return node.children
+    .map((child) => (child.kind === 'text' ? escapeText(child.value) : write(child, 0, declarationsFor(child, plan))))
+    .join('');
+}
+
+/** The declarations the names in an element and its descendants need: the default namespace, then prefixes by use. */
+function declarationsFor(root: InstanceElement, plan: NamespacePlan): string[] {
+  let defaultNs: string | undefined;
+  const prefixes = new Map<string, string>();
+  const use = (ns: string, attribute: boolean) => {
+    if (ns === '' || ns === XML_NS) return;
+    if (!attribute && ns === plan.defaultNs) {
+      defaultNs = ns;
+      return;
+    }
+    const prefix = plan.prefixes.get(ns);
+    if (prefix !== undefined) prefixes.set(prefix, ns);
+  };
+  for (const e of elements(root)) {
+    use(e.ns, false);
+    for (const a of e.attributes) use(a.ns, true);
+    // A QName value whose prefix the document declares at its root needs the declaration here.
+    for (const [prefix, ns] of Object.entries(e.valueNamespaces ?? {})) {
+      if (plan.prefixes.get(ns) === prefix) prefixes.set(prefix, ns);
+    }
+  }
+  return [
+    ...(defaultNs !== undefined ? [`xmlns="${escapeAttribute(defaultNs)}"`] : []),
+    ...[...prefixes].map(([prefix, ns]) => `xmlns:${prefix}="${escapeAttribute(ns)}"`),
+  ];
 }

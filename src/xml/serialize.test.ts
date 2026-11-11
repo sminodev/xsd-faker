@@ -1,6 +1,6 @@
 import { DOMParser, type Element } from '@xmldom/xmldom';
 import { describe, expect, it } from 'vitest';
-import { escapeAttribute, planNamespaces, serializeXml } from './serialize.js';
+import { escapeAttribute, planNamespaces, serializeMixed, serializeXml } from './serialize.js';
 import { element, type InstanceElement, text } from './tree.js';
 
 const A = 'urn:a';
@@ -55,6 +55,12 @@ describe('planNamespaces', () => {
     expect(plan.prefixes.get(A)).toBe('ns1');
   });
 
+  it('keeps prefixes of QName values away from other namespaces', () => {
+    const tree = element(A, 'Root', { children: [element(B, 'Item')] });
+    tree.valueNamespaces = { c: 'urn:c' };
+    expect(planNamespaces(tree, new Map([[B, 'c']])).prefixes.get(B)).toBe('ns1');
+  });
+
   it('gives namespaced attributes a prefix even for the default namespace', () => {
     const tree = element(A, 'Root', { attributes: [{ ns: A, name: 'id', value: '1', type: 'string' }] });
     const plan = planNamespaces(tree);
@@ -85,6 +91,13 @@ describe('serializeXml', () => {
     expect(readBack(serializeXml(tree))).toEqual(['{urn:a}Root', '@{urn:b}code=K', '{}local', '{urn:b}Item']);
   });
 
+  it('indents nothing inside mixed content', () => {
+    const tree = element('', 'p', {
+      children: [text('a '), element('', 'q', { children: [element('', 'r', { children: [text('x')] })] })],
+    });
+    expect(serializeXml(tree, { declaration: false })).toBe('<p>a <q><r>x</r></q></p>\n');
+  });
+
   it('keeps text content unindented and writes empty elements short', () => {
     const tree = element('', 'p', {
       children: [text('a '), element('', 'b', { children: [text('bold')] }), element('', 'br')],
@@ -95,6 +108,49 @@ describe('serializeXml', () => {
   it('adds the schema location', () => {
     expect(serializeXml(element(A, 'Root'), { declaration: false, schemaLocation: 'order.xsd' })).toBe(
       '<Root xmlns="urn:a" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="urn:a order.xsd"/>\n',
+    );
+  });
+
+  it('declares the prefixes of QName values on the element that holds them', () => {
+    const tree = element('', 'Root', { children: [element('', 'Ref', { children: [text('c:Target')] })] });
+    const ref = tree.children[0] as InstanceElement;
+    ref.valueNamespaces = { c: 'urn:c' };
+    expect(serializeXml(tree, { declaration: false, indent: '' })).toBe(
+      '<Root><Ref xmlns:c="urn:c">c:Target</Ref></Root>\n',
+    );
+  });
+
+  it('does not repeat a declaration the root already has', () => {
+    const tree = element('', 'Root', { children: [element(B, 'Ref', { children: [text('c:Target')] })] });
+    const ref = tree.children[0] as InstanceElement;
+    ref.valueNamespaces = { c: B };
+    expect(serializeXml(tree, { declaration: false, indent: '', prefixes: new Map([[B, 'c']]) })).toBe(
+      '<Root xmlns:c="urn:b"><c:Ref>c:Target</c:Ref></Root>\n',
+    );
+  });
+
+  it('writes mixed content with the document prefixes and the declarations each child needs', () => {
+    const note = element(A, 'Note', {
+      children: [
+        text('Ring '),
+        element(B, 'b', {
+          children: [text('twice')],
+          attributes: [{ ns: A, name: 'lang', value: 'de', type: 'string' }],
+        }),
+        text(' & '),
+        element(A, 'i', { children: [element(B, 'u')] }),
+        text('.'),
+      ],
+    });
+    note.mixed = true;
+    const root = element(A, 'Root', { children: [note] });
+    const plan = planNamespaces(root, new Map([[B, 'c']]));
+    expect(serializeMixed(note, plan)).toBe(
+      'Ring <c:b xmlns:c="urn:b" xmlns:ns1="urn:a" ns1:lang="de">twice</c:b> &amp; ' +
+        '<i xmlns="urn:a" xmlns:c="urn:b"><c:u/></i>.',
+    );
+    expect(serializeXml(root, { indent: '', declaration: false, prefixes: new Map([[B, 'c']]) })).toContain(
+      '<Note>Ring <c:b ns1:lang="de">twice</c:b> &amp; <i><c:u/></i>.</Note>',
     );
   });
 

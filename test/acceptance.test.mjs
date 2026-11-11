@@ -118,6 +118,35 @@ test('one occurrence of a repeated group remains an array in JSON', async () => 
   assert.ok(Array.isArray(sample.json.Code));
   assert.equal(sample.json.Code.length, 1);
 });
+const common = 'xmlns:c="urn:common"';
+const refElement = (decl) =>
+  `<xs:element name="R"><xs:complexType><xs:sequence>${decl}</xs:sequence></xs:complexType></xs:element>`;
+for (const [label, decl] of [
+  ['fixed', '<xs:element name="Ref" type="xs:QName" fixed="c:Target"/>'],
+  ['default', '<xs:element name="Ref" type="xs:QName" default="c:Target"/>'],
+  [
+    'enumeration',
+    '<xs:element name="Ref"><xs:simpleType><xs:restriction base="xs:QName"><xs:enumeration value="c:Target"/></xs:restriction></xs:simpleType></xs:element>',
+  ],
+  [
+    'list',
+    '<xs:element name="Ref" fixed="c:One c:Two"><xs:simpleType><xs:list itemType="xs:QName"/></xs:simpleType></xs:element>',
+  ],
+])
+  test(`a QName ${label} value declares its prefix`, async () => {
+    const sample = await generated(refElement(decl), {}, common);
+    okay(sample);
+    assert.match(sample.xml, /xmlns:c="urn:common"/);
+  });
+test('a QName attribute value declares its prefix', async () => {
+  const sample = await generated(
+    '<xs:element name="R"><xs:complexType><xs:attribute name="ref" type="xs:QName" fixed="c:Target" use="required"/></xs:complexType></xs:element>',
+    {},
+    common,
+  );
+  okay(sample);
+  assert.match(sample.xml, /xmlns:c="urn:common"/);
+});
 test('choice first and preferred choose a single branch', async () => {
   const a = await generated(choice);
   okay(a);
