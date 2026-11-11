@@ -350,6 +350,20 @@ test('a pattern on a union is met', async () => {
     assert.match(sample.json, /^[A-Z]{3}$/);
   }
 });
+test('an untyped element writes its fixed value', async () => {
+  const sample = await generated(
+    '<xs:element name="R"><xs:complexType><xs:sequence><xs:element name="Mode" fixed="AUTO"/></xs:sequence></xs:complexType></xs:element>',
+  );
+  okay(sample);
+  assert.equal(plain(sample.json).Mode, 'AUTO');
+});
+test('mixed content with a fixed value holds that text', async () => {
+  const sample = await generated(
+    '<xs:element name="R" fixed="AUTO"><xs:complexType mixed="true"><xs:sequence><xs:element name="b" type="xs:string" minOccurs="0"/></xs:sequence></xs:complexType></xs:element>',
+  );
+  okay(sample);
+  assert.equal(plain(sample.json).value, 'AUTO');
+});
 test('mixed content keeps the prefixes of the XML', async () => {
   const sample = await generated(
     '<xs:element name="R"><xs:complexType mixed="true"><xs:sequence><xs:element name="b" type="xs:string"/></xs:sequence></xs:complexType></xs:element>',

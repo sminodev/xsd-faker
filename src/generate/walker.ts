@@ -229,11 +229,15 @@ export class Walker {
         this.complex(out, complex.node, complex.doc, here, depth, fixed, decl);
       } else if (!(qname.ns === XS && qname.local === 'anyType')) {
         this.simpleText(out, this.facets.read(qname, decl), here, fixed, decl);
+      } else if (fixed !== undefined) {
+        out.children = [text(fixed)];
       }
     } else if (anonymousComplex) {
       this.complex(out, anonymousComplex, declDoc, here, depth, fixed, decl);
     } else if (anonymousSimple) {
       this.simpleText(out, this.facets.read(anonymousSimple), here, fixed, decl);
+    } else if (fixed !== undefined) {
+      out.children = [text(fixed)];
     }
     return out;
   }
@@ -301,6 +305,12 @@ export class Walker {
     if (plan.simple) {
       this.simpleText(out, plan.simple, path, fixed, decl);
       out.simpleContent = true;
+      return;
+    }
+    if (plan.mixed && fixed !== undefined) {
+      // A value constraint on mixed content is its text.
+      out.children = [text(fixed)];
+      out.mixed = true;
       return;
     }
     const children: InstanceNode[] = [];
