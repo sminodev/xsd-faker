@@ -2,7 +2,7 @@ import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, relative, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { generateSampleFiles, listRootsFile } from './node.js';
-import type { BatchOptions, OptionalMode, ProfileName, Sample, ValueLists, XmlValidator } from './index.js';
+import type { BatchOptions, NilMode, OptionalMode, ProfileName, Sample, ValueLists, XmlValidator } from './index.js';
 export interface CliOutput {
   stdout(text: string): void;
   stderr(text: string): void;
@@ -24,6 +24,7 @@ Generate XML and JSON fixtures from XML Schema 1.0. No network access.
   --seed <number>                 Reproducible starting seed (default: 1)
   --optional-elements <mode>      none, all, random (default: none)
   --optional-attributes <mode>    none, all, random (default: none)
+  --nil <never|random>            xsi:nil on nillable elements (default: never)
   --optional-depth <number>       Optional depth below --max-depth (default: 12)
   --max-depth <number>            Hard depth limit, including required content (64)
   --max-nodes <number>            Hard element budget per document (10000)
@@ -112,6 +113,7 @@ export async function run(
         'optional-elements': { type: 'string' },
         'optional-attributes': { type: 'string' },
         'optional-depth': { type: 'string' },
+        nil: { type: 'string' },
         'max-depth': { type: 'string' },
         'max-nodes': { type: 'string' },
         choice: { type: 'string' },
@@ -215,6 +217,7 @@ export async function run(
               ...(flags['text-property'] !== undefined ? { textProperty: flags['text-property'] } : {}),
             },
       ...(optionalDepth !== undefined ? { maxDepth: optionalDepth } : {}),
+      ...(flags.nil !== undefined ? { nil: enumeration<NilMode>('nil', flags.nil, ['never', 'random'], 'never') } : {}),
       ...(flags.root ? { root: flags.root } : {}),
       ...(flags.date ? { referenceDate: flags.date } : {}),
       ...(flags.values ? { samples: readValues(flags.values) } : {}),

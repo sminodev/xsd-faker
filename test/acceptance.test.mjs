@@ -296,7 +296,9 @@ for (const [facet, value, tokens] of [
       `<xs:element name="R"><xs:simpleType><xs:restriction base="xs:NMTOKENS"><xs:${facet} value="${value}"/></xs:restriction></xs:simpleType></xs:element>`,
     );
     okay(sample);
-    assert.ok(tokens(sample.json.split(' ').length), sample.json);
+    // A list is a JSON array of its items, one string per NMTOKEN.
+    assert.ok(Array.isArray(sample.json) && tokens(sample.json.length), JSON.stringify(sample.json));
+    assert.deepEqual(sample.json, sample.xml.match(/<R>([^<]*)<\/R>/)[1].split(' '));
   });
 for (const [facet, value, length] of [
   ['maxLength', 10, (n) => n <= 10],
@@ -498,6 +500,18 @@ test('all branches require an explicit template request', async () => {
   ]);
   assert.equal(verdict.valid, false);
 });
+test('a template writes one occurrence of a repeated choice per branch, a sequence branch together', async () => {
+  const body =
+    '<xs:element name="R"><xs:complexType><xs:sequence><xs:choice maxOccurs="unbounded"><xs:element name="a" type="xs:int"/><xs:sequence><xs:element name="b" type="xs:string"/><xs:element name="c" type="xs:string"/></xs:sequence></xs:choice><xs:element name="d" type="xs:string"/></xs:sequence></xs:complexType></xs:element>';
+  const sample = await generated(body, { choice: 'all', mode: 'template', values: typed });
+  assert.equal(sample.status, 'template');
+  assert.deepEqual(plain(sample.json), { '#choice': [{ a: 1 }, { b: 'x', c: 'x' }], d: 'x' });
+  const twice = await generated(body, { choice: 'all', mode: 'template', values: typed, repeat: 2 });
+  assert.deepEqual(plain(twice.json)['#choice'], [{ a: 1 }, { b: 'x', c: 'x' }, { a: 1 }, { b: 'x', c: 'x' }]);
+  // A choice that occurs once still has no group property.
+  const once = await generated(choice, { choice: 'all', mode: 'template', values: typed });
+  assert.deepEqual(Object.keys(plain(once.json)), ['First', 'Second', 'Third']);
+});
 test('separate branch samples produce accepted coverage', async () => {
   const batch = await generateSamples(input(choice), { ...options, count: 3, coverage: true });
   batch.samples.forEach(okay);
@@ -537,6 +551,279 @@ test('invalid attempts do not count as covered branches', async () => {
   });
   assert.equal(batch.coverage.covered, 0);
   assert.equal(batch.coverage.complete, false);
+});
+const contractList = `<xs:simpleType name="IntList"><xs:list itemType="xs:integer"/></xs:simpleType><xs:simpleType name="Color"><xs:restriction base="xs:token"><xs:enumeration value="red"/><xs:enumeration value="green"/></xs:restriction></xs:simpleType><xs:simpleType name="ColorList"><xs:list itemType="Color"/></xs:simpleType><xs:simpleType name="ShortList"><xs:restriction base="IntList"><xs:minLength value="1"/><xs:maxLength value="3"/></xs:restriction></xs:simpleType><xs:simpleType name="Pair"><xs:restriction base="IntList"><xs:enumeration value="1 2"/><xs:enumeration value="3 4"/></xs:restriction></xs:simpleType><xs:simpleType name="Mixed"><xs:list><xs:simpleType><xs:union memberTypes="xs:int xs:decimal"/></xs:simpleType></xs:list></xs:simpleType><xs:element name="R"><xs:complexType><xs:sequence><xs:element name="Numbers" type="IntList"/><xs:element name="Short" type="ShortList"/><xs:element name="Repeated" type="IntList" maxOccurs="2"/><xs:element name="Tokens" type="xs:NMTOKENS"/><xs:element name="Pick" type="Pair"/><xs:element name="Mixed" type="Mixed"/><xs:element name="Simple"><xs:complexType><xs:simpleContent><xs:extension base="IntList"><xs:attribute name="colors" type="ColorList"/></xs:extension></xs:simpleContent></xs:complexType></xs:element></xs:sequence><xs:attribute name="codes" type="ColorList"/></xs:complexType></xs:element>`;
+test('lists are JSON arrays of typed items in elements, attributes, repetitions and simple content', async () => {
+  const items = (lexical, type) =>
+    lexical
+      .trim()
+      .split(/\s+/)
+      .filter((item) => item !== '')
+      .map((item) => (type === 'string' ? item : Number(item)));
+  for (const seed of [1, 2, 3, 4, 5]) {
+    const sample = await generated(
+      contractList,
+      { seed, optional: 'all', repeat: 2 },
+      'xmlns="urn:v:list" targetNamespace="urn:v:list" elementFormDefault="qualified"',
+    );
+    okay(sample);
+    const xml = (name) =>
+      [...sample.xml.matchAll(new RegExp(`<${name}(?: [^>]*)?>([^<]*)</${name}>`, 'g'))].map((m) => m[1]);
+    const json = plain(sample.json);
+    assert.deepEqual(json.Numbers, items(xml('Numbers')[0], 'integer'));
+    assert.deepEqual(json.Short, items(xml('Short')[0], 'integer'));
+    assert.deepEqual(
+      json.Repeated,
+      xml('Repeated').map((v) => items(v, 'integer')),
+    );
+    assert.equal(json.Repeated.length, 2);
+    assert.deepEqual(json.Tokens, items(xml('Tokens')[0], 'string'));
+    assert.ok(
+      [
+        [1, 2],
+        [3, 4],
+      ].some((pair) => JSON.stringify(pair) === JSON.stringify(json.Pick)),
+    );
+    // Items of a union of numbers are numbers.
+    assert.deepEqual(json.Mixed, items(xml('Mixed')[0], 'number'));
+    assert.deepEqual(json.Simple.value, items(xml('Simple')[0], 'integer'));
+    assert.deepEqual(json.Simple.colors, items(/colors="([^"]*)"/.exec(sample.xml)[1], 'string'));
+    assert.deepEqual(json.codes, items(/codes="([^"]*)"/.exec(sample.xml)[1], 'string'));
+  }
+});
+test('a union with a list member stays a string', async () => {
+  const sample = await generated(
+    '<xs:simpleType name="L"><xs:list itemType="xs:int"/></xs:simpleType><xs:element name="R"><xs:simpleType><xs:union memberTypes="L xs:boolean"/></xs:simpleType></xs:element>',
+    { seed: 3 },
+  );
+  okay(sample);
+  assert.equal(typeof sample.json, 'string');
+});
+const contractNil = `<xs:element name="R"><xs:complexType><xs:sequence><xs:element name="D" type="xs:date" nillable="true"/><xs:element name="A" nillable="true"><xs:complexType><xs:sequence><xs:element name="Place" type="xs:string"/></xs:sequence><xs:attribute name="kind" type="xs:string" use="required"/></xs:complexType></xs:element><xs:element name="B" nillable="true"><xs:complexType><xs:simpleContent><xs:extension base="xs:decimal"><xs:attribute name="w" type="xs:string"/></xs:extension></xs:simpleContent></xs:complexType></xs:element><xs:element name="K" nillable="true" minOccurs="0"><xs:complexType><xs:sequence><xs:element name="X" type="xs:int"/></xs:sequence></xs:complexType></xs:element><xs:element name="L" type="xs:int" nillable="true" maxOccurs="3"/><xs:element name="F" type="xs:int" nillable="true" fixed="5"/></xs:sequence></xs:complexType></xs:element>`;
+const nilNamespace = 'xmlns="urn:v:nil" targetNamespace="urn:v:nil" elementFormDefault="qualified"';
+test("nil: 'random' writes nillable elements as nil, valid and with the contract's JSON forms", async () => {
+  const seen = new Set();
+  for (let seed = 1; seed <= 24; seed += 1) {
+    const sample = await generated(contractNil, { seed, nil: 'random', optional: 'random', repeat: 3 }, nilNamespace);
+    okay(sample);
+    const json = plain(sample.json);
+    const nilled = (name) =>
+      [...sample.xml.matchAll(new RegExp(`<${name}\\b([^>]*)>`, 'g'))].map((m) => m[1].includes('xsi:nil="true"'));
+    if (nilled('D')[0]) assert.equal(json.D, null);
+    if (nilled('A')[0]) assert.deepEqual(json.A, { kind: json.A.kind, value: null });
+    if (nilled('B')[0]) assert.ok(json.B === null || json.B.value === null);
+    if (nilled('K')[0]) assert.equal(json.K, null);
+    nilled('L').forEach((isNil, i) => assert.equal(json.L[i] === null, isNil));
+    for (const name of ['D', 'A', 'B', 'K', 'L']) if (nilled(name).some(Boolean)) seen.add(name);
+    // A fixed value excludes nil; a nil element keeps its required attribute and has no content.
+    assert.equal(nilled('F')[0], false);
+    assert.doesNotMatch(sample.xml, /xsi:nil="true">/);
+  }
+  assert.deepEqual([...seen].sort(), ['A', 'B', 'D', 'K', 'L']);
+});
+test("nil: 'never' draws no random numbers and changes nothing", async () => {
+  for (const seed of [1, 9]) {
+    const settings = { seed, optional: 'random', choice: 'random', repeat: 2 };
+    const before = await generated(contractNil, settings, nilNamespace);
+    const never = await generated(contractNil, { ...settings, nil: 'never' }, nilNamespace);
+    assert.deepEqual(never, before);
+    assert.doesNotMatch(never.xml, /xsi:nil/);
+  }
+  await assert.rejects(generated(contractNil, { nil: 'always' }, nilNamespace), /nil must be never or random/);
+});
+test('wildcard content follows the schemaless JSON rule: one occurrence is a value, values are strings', async () => {
+  const xs = 'xmlns:xs="http://www.w3.org/2001/XMLSchema"';
+  const files = {
+    'a.xsd': `<xs:schema ${xs} xmlns="urn:v:any" targetNamespace="urn:v:any" elementFormDefault="qualified"><xs:import namespace="urn:foreign" schemaLocation="f.xsd"/><xs:element name="R"><xs:complexType><xs:sequence><xs:element name="Head" type="xs:string"/><xs:element name="Ext"><xs:complexType><xs:sequence><xs:any namespace="##other" processContents="lax" maxOccurs="unbounded"/></xs:sequence></xs:complexType></xs:element><xs:element name="Lokal"><xs:complexType><xs:sequence><xs:element name="any" type="xs:string"/><xs:any namespace="##local" processContents="skip" maxOccurs="2"/></xs:sequence></xs:complexType></xs:element></xs:sequence></xs:complexType></xs:element></xs:schema>`,
+    'f.xsd': `<xs:schema ${xs} targetNamespace="urn:foreign"><xs:element name="Count" type="xs:int"/></xs:schema>`,
+  };
+  const one = await generateSample({ entry: 'a.xsd', files }, { ...options, values: { value: () => '7' } });
+  okay(one);
+  const json = plain(one.json);
+  // The global element of another namespace, typed xs:int in its schema, is a string here and not an array.
+  assert.deepEqual(json.Ext, { Count: '7' });
+  // The placeholder does not take the declared name `any`.
+  assert.deepEqual(json.Lokal, { any: '7', any2: 'any content' });
+  const two = await generateSample({ entry: 'a.xsd', files }, { ...options, repeat: 2, values: { value: () => '7' } });
+  okay(two);
+  assert.deepEqual(plain(two.json).Ext, { Count: ['7', '7'] });
+  assert.deepEqual(plain(two.json).Lokal.any2, ['any content', 'any content']);
+});
+const contractPolymorphism = `<xs:complexType name="DocType"><xs:sequence><xs:element name="Number" type="xs:string"/></xs:sequence></xs:complexType><xs:element name="Document" type="DocType" abstract="true"/><xs:element name="Invoice" substitutionGroup="Document"><xs:complexType><xs:complexContent><xs:extension base="DocType"><xs:sequence><xs:element name="Amount" type="xs:decimal"/></xs:sequence></xs:extension></xs:complexContent></xs:complexType></xs:element><xs:element name="Credit" type="DocType" substitutionGroup="Document"/><xs:complexType name="Vehicle" abstract="true"><xs:sequence><xs:element name="Plate" type="xs:string"/></xs:sequence></xs:complexType><xs:complexType name="Car"><xs:complexContent><xs:extension base="Vehicle"><xs:sequence><xs:element name="Seats" type="xs:int"/></xs:sequence></xs:extension></xs:complexContent></xs:complexType><xs:complexType name="Animal"><xs:sequence><xs:element name="Name" type="xs:string"/></xs:sequence></xs:complexType><xs:complexType name="Dog"><xs:complexContent><xs:extension base="Animal"><xs:sequence><xs:element name="Breed" type="xs:string" minOccurs="0"/></xs:sequence></xs:extension></xs:complexContent></xs:complexType><xs:element name="R"><xs:complexType><xs:sequence><xs:element ref="Document" maxOccurs="2"/><xs:element name="Vehicle" type="Vehicle"/><xs:element name="Pet" type="Animal" maxOccurs="2"/><xs:element name="Count" type="xs:decimal"/><xs:element name="Price" type="Amount" minOccurs="0"/></xs:sequence></xs:complexType></xs:element><xs:complexType name="Amount"><xs:simpleContent><xs:extension base="xs:decimal"><xs:attribute name="currency" type="xs:string" use="required"/></xs:extension></xs:simpleContent></xs:complexType><xs:complexType name="EuroAmount"><xs:simpleContent><xs:extension base="Amount"><xs:attribute name="source" type="xs:string"/></xs:extension></xs:simpleContent></xs:complexType>`;
+const subNamespace = 'xmlns="urn:v:sub" targetNamespace="urn:v:sub" elementFormDefault="qualified"';
+test('substitution group members and xsi:type alternatives are chosen like branches and counted in coverage', async () => {
+  const batch = await generateSamples(input(contractPolymorphism, subNamespace), {
+    ...options,
+    root: 'R',
+    count: 3,
+    coverage: true,
+    optional: 'all',
+  });
+  batch.samples.forEach(okay);
+  const members = new Set();
+  const pets = new Set();
+  const prices = new Set();
+  for (const sample of batch.samples) {
+    const json = plain(sample.json);
+    // The abstract head and the abstract type never occur; Car, the only concrete type, needs no decision.
+    assert.doesNotMatch(sample.xml, /<(\w+:)?Document\b/);
+    const prefix = /xmlns:(\w+)="urn:v:sub"/.exec(sample.xml)[1];
+    assert.match(sample.xml, new RegExp(`<Vehicle xsi:type="${prefix}:Car">`));
+    assert.equal(json.Vehicle['#type'], '{urn:v:sub}Car');
+    for (const name of ['Invoice', 'Credit']) {
+      if (json[name] === undefined) continue;
+      members.add(name);
+      assert.ok(Array.isArray(json[name]));
+    }
+    for (const pet of json.Pet) pets.add(pet['#type'] ?? 'Animal');
+    // A simple type keeps a plain value; simple content with xsi:type has #type, attributes and value.
+    assert.equal(typeof json.Count, 'number');
+    assert.doesNotMatch(sample.xml, /<Count xsi:type/);
+    prices.add(json.Price['#type'] ?? 'Amount');
+    assert.equal(typeof json.Price.value, 'number');
+    assert.equal(typeof json.Price.currency, 'string');
+  }
+  assert.deepEqual([...prices].sort(), ['Amount', '{urn:v:sub}EuroAmount']);
+  assert.deepEqual([...members].sort(), ['Credit', 'Invoice']);
+  assert.deepEqual([...pets].sort(), ['Animal', '{urn:v:sub}Dog']);
+  assert.equal(batch.coverage.total, 6);
+  assert.equal(batch.coverage.complete, true);
+  const one = await generateSamples(input(contractPolymorphism, subNamespace), {
+    ...options,
+    root: 'R',
+    count: 1,
+    coverage: true,
+  });
+  assert.deepEqual(
+    one.coverage.uncovered.map(({ kind, alternative }) => [kind, alternative]),
+    [
+      ['substitution', '{urn:v:sub}Credit'],
+      ['type', '{urn:v:sub}Dog'],
+    ],
+  );
+});
+const derived = `<xs:complexType name="T"><xs:sequence><xs:element name="a" type="xs:string"/><xs:element name="b" type="xs:string" minOccurs="0"/></xs:sequence></xs:complexType><xs:complexType name="Ext"><xs:complexContent><xs:extension base="T"><xs:sequence><xs:element name="e" type="xs:string"/></xs:sequence></xs:extension></xs:complexContent></xs:complexType><xs:complexType name="Res"><xs:complexContent><xs:restriction base="T"><xs:sequence><xs:element name="a" type="xs:string"/></xs:sequence></xs:restriction></xs:complexContent></xs:complexType><xs:complexType name="Closed" block="#all"><xs:sequence><xs:element name="a" type="xs:string"/></xs:sequence></xs:complexType><xs:complexType name="Opened"><xs:complexContent><xs:extension base="Closed"><xs:sequence><xs:element name="o" type="xs:string"/></xs:sequence></xs:extension></xs:complexContent></xs:complexType><xs:element name="H" type="T" block="extension"/><xs:element name="HM" type="Ext" substitutionGroup="H"/><xs:element name="HR" type="Res" substitutionGroup="H"/><xs:element name="S" type="T" block="substitution"/><xs:element name="SM" type="T" substitutionGroup="S"/>`;
+const blockRoot = `${derived}<xs:element name="R"><xs:complexType><xs:sequence><xs:element name="NoExt" type="T" block="extension"/><xs:element name="NoRes" type="T" block="restriction"/><xs:element name="C" type="Closed"/><xs:element ref="H"/><xs:element ref="S"/></xs:sequence></xs:complexType></xs:element>`;
+test('block on elements and types limits the alternatives as libxml2 does', async () => {
+  const seen = { NoExt: new Set(), NoRes: new Set(), C: new Set(), H: new Set(), S: new Set() };
+  for (let seed = 1; seed <= 16; seed += 1) {
+    const sample = await generated(blockRoot, { seed, choice: 'random', root: 'R' });
+    okay(sample);
+    for (const name of ['NoExt', 'NoRes', 'C'])
+      seen[name].add(new RegExp(`<${name}(?: xsi:type="(\\w+)")?`).exec(sample.xml)[1] ?? '-');
+    seen.H.add(/<(H|HM|HR)[ >]/.exec(sample.xml)[1]);
+    seen.S.add(/<(S|SM)[ >]/.exec(sample.xml)[1]);
+  }
+  assert.deepEqual([...seen.NoExt].sort(), ['-', 'Res']);
+  assert.deepEqual([...seen.NoRes].sort(), ['-', 'Ext']);
+  assert.deepEqual([...seen.C], ['-']);
+  // The head blocks extension, so HM (extension) is no member; S blocks substitution altogether.
+  assert.deepEqual([...seen.H].sort(), ['H', 'HR']);
+  assert.deepEqual([...seen.S], ['S']);
+  // libxml2 rejects exactly the excluded alternatives.
+  const files = new Map(Object.entries(input(blockRoot).files));
+  const doc = (noExt, noRes, c, h, s) =>
+    `<R xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"><NoExt${noExt}><a>x</a></NoExt><NoRes${noRes}><a>x</a>${noRes.includes('Ext') ? '<e>y</e>' : ''}</NoRes><C${c}><a>x</a></C>${h}${s}</R>`;
+  const ok = ['', '', '', '<H><a>x</a></H>', '<S><a>x</a></S>'];
+  const variants = [
+    [ok, true],
+    [[' xsi:type="Ext"', '', '', ok[3], ok[4]], false],
+    [['', ' xsi:type="Res"', '', ok[3], ok[4]], false],
+    [['', '', ' xsi:type="Opened"', ok[3], ok[4]], false],
+    [['', '', '', '<HM><a>x</a><e>y</e></HM>', ok[4]], false],
+    [['', '', '', ok[3], '<SM><a>x</a></SM>'], false],
+    [[' xsi:type="Res"', ' xsi:type="Ext"', '', '<HR><a>x</a></HR>', ok[4]], true],
+  ];
+  const verdicts = await validator(
+    { entry: 'a.xsd', files },
+    variants.map(([parts]) => doc(...parts)),
+  );
+  assert.deepEqual(
+    verdicts.map((v) => v.valid),
+    variants.map(([, valid]) => valid),
+  );
+});
+test('block on an intermediate type counts for substitution groups, not for xsi:type, as in libxml2', async () => {
+  const body = `<xs:complexType name="T"><xs:sequence><xs:element name="a" type="xs:string"/></xs:sequence></xs:complexType><xs:complexType name="Mid" block="extension"><xs:complexContent><xs:extension base="T"/></xs:complexContent></xs:complexType><xs:complexType name="Leaf"><xs:complexContent><xs:extension base="Mid"/></xs:complexContent></xs:complexType><xs:element name="H" type="T"/><xs:element name="L" type="Leaf" substitutionGroup="H"/><xs:element name="M" type="Mid" substitutionGroup="H"/><xs:element name="R"><xs:complexType><xs:sequence><xs:element ref="H"/><xs:element name="E" type="T"/></xs:sequence></xs:complexType></xs:element>`;
+  const batch = await generateSamples(input(body), { ...options, root: 'R', count: 4, coverage: true });
+  batch.samples.forEach(okay);
+  const all = batch.samples.map((s) => s.xml).join('');
+  assert.doesNotMatch(all, /<L>/);
+  assert.match(all, /<M>/);
+  assert.match(all, /<E xsi:type="Leaf">/);
+  const [member] = await validator({ entry: 'a.xsd', files: new Map(Object.entries(input(body).files)) }, [
+    '<R><L><a>x</a></L><E><a>x</a></E></R>',
+  ]);
+  assert.equal(member.valid, false);
+});
+test('blockDefault applies where an element or type has no block of its own', async () => {
+  const body = `${derived}<xs:element name="R"><xs:complexType><xs:sequence><xs:element name="E" type="T"/></xs:sequence></xs:complexType></xs:element>`;
+  const types = new Set();
+  for (let seed = 1; seed <= 10; seed += 1) {
+    const sample = await generated(body, { seed, choice: 'random', root: 'R' }, 'blockDefault="extension"');
+    okay(sample);
+    types.add(/<E(?: xsi:type="(\w+)")?/.exec(sample.xml)[1] ?? '-');
+  }
+  assert.deepEqual([...types].sort(), ['-', 'Res']);
+});
+test('substitution is transitive across namespaces; #type tells types of one local name apart', async () => {
+  const xs = 'xmlns:xs="http://www.w3.org/2001/XMLSchema"';
+  const files = {
+    'a.xsd': `<xs:schema ${xs} xmlns="urn:a" xmlns:b="urn:b" targetNamespace="urn:a" elementFormDefault="qualified"><xs:import namespace="urn:b" schemaLocation="b.xsd"/><xs:complexType name="T"><xs:sequence><xs:element name="v" type="xs:string"/></xs:sequence></xs:complexType><xs:element name="Head" type="T" abstract="true"/><xs:element name="Direct" type="T" substitutionGroup="Head"/><xs:element name="R"><xs:complexType><xs:sequence><xs:element ref="Head" maxOccurs="3"/><xs:element name="E" type="T" maxOccurs="2"/></xs:sequence></xs:complexType></xs:element></xs:schema>`,
+    'b.xsd': `<xs:schema ${xs} xmlns:a="urn:a" xmlns="urn:b" targetNamespace="urn:b" elementFormDefault="qualified"><xs:import namespace="urn:a" schemaLocation="a.xsd"/><xs:complexType name="T"><xs:complexContent><xs:extension base="a:T"><xs:sequence><xs:element name="w" type="xs:string"/></xs:sequence></xs:extension></xs:complexContent></xs:complexType><xs:element name="Middle" type="a:T" abstract="true" substitutionGroup="a:Head"/><xs:element name="Leaf" type="T" substitutionGroup="Middle"/></xs:schema>`,
+  };
+  const batch = await generateSamples(
+    { entry: 'a.xsd', files },
+    { ...options, root: 'R', count: 3, coverage: true, repeat: 3 },
+  );
+  batch.samples.forEach(okay);
+  assert.equal(batch.coverage.complete, true);
+  const all = batch.samples.map((s) => s.xml).join('');
+  assert.match(all, /<\w+:Leaf>/);
+  assert.match(all, /<Direct>/);
+  assert.doesNotMatch(all, /Middle|Head>/);
+  const types = new Set(batch.samples.flatMap((s) => plain(s.json).E.map((e) => e['#type'] ?? '-')));
+  assert.deepEqual([...types].sort(), ['-', '{urn:b}T']);
+});
+test('abstract declarations without a concrete alternative are reported, never written', async () => {
+  const head = await generated(
+    '<xs:element name="Head" type="xs:string" abstract="true"/><xs:element name="R"><xs:complexType><xs:sequence><xs:element ref="Head"/></xs:sequence></xs:complexType></xs:element>',
+    { root: 'R' },
+  );
+  assert.equal(head.status, 'incomplete');
+  assert.ok(head.problems.some((p) => p.code === 'unsupported' && /no member/.test(p.message)));
+  assert.doesNotMatch(head.xml, /Head/);
+  // An optional reference that is left out needs no member.
+  const optional = await generated(
+    '<xs:element name="Head" type="xs:string" abstract="true"/><xs:element name="R"><xs:complexType><xs:sequence><xs:element ref="Head" minOccurs="0"/></xs:sequence></xs:complexType></xs:element>',
+    { root: 'R' },
+  );
+  okay(optional);
+  const type = await generated(
+    '<xs:complexType name="A" abstract="true"><xs:sequence><xs:element name="x" type="xs:string"/></xs:sequence></xs:complexType><xs:element name="R" type="A"/>',
+  );
+  assert.equal(type.status, 'incomplete');
+  assert.ok(type.problems.some((p) => /no concrete type/.test(p.message)));
+});
+test('smallest, prefer and templates treat members and types as branches; nil keeps xsi:type', async () => {
+  const body = `${derived}<xs:element name="R"><xs:complexType><xs:sequence><xs:element ref="H"/><xs:element name="E" type="T" nillable="true"/></xs:sequence></xs:complexType></xs:element>`;
+  const smallest = await generated(body, { choice: 'smallest', optional: 'all', root: 'R' });
+  okay(smallest);
+  // The restriction Res has one child, T two with the optional b: H as Res and HR tie, and H comes first.
+  assert.match(smallest.xml, /<H xsi:type="Res">/);
+  assert.match(smallest.xml, /<E xsi:type="Res">/);
+  const preferred = await generated(body, { choice: { prefer: ['Ext'] }, root: 'R' });
+  okay(preferred);
+  assert.match(preferred.xml, /<E xsi:type="Ext">/);
+  const template = await generated(body, { choice: 'all', mode: 'template', root: 'R' });
+  assert.match(template.xml, /<H>[\s\S]*<HR>/);
+  const abstractNil = await generated(
+    '<xs:complexType name="A" abstract="true"><xs:attribute name="k" type="xs:string" use="required"/></xs:complexType><xs:complexType name="B"><xs:complexContent><xs:extension base="A"/></xs:complexContent></xs:complexType><xs:element name="R"><xs:complexType><xs:sequence><xs:element name="E" type="A" nillable="true"/></xs:sequence></xs:complexType></xs:element>',
+    { nil: 'random', seed: 2 },
+  );
+  okay(abstractNil);
+  if (/xsi:nil/.test(abstractNil.xml))
+    assert.deepEqual(Object.keys(plain(abstractNil.json).E), ['#type', 'k', 'value']);
 });
 test('a chameleon include takes the namespace of each document that includes it', async () => {
   const xs = 'xmlns:xs="http://www.w3.org/2001/XMLSchema"';
@@ -970,6 +1257,67 @@ test('smallest handles a shared forty-level type graph within a second', async (
   okay(sample);
   assert.match(sample.xml, /<Small>/);
   assert.ok(performance.now() - start < 1000);
+});
+/** IDs and references read back from the XML: every ID once, every reference to one of them. */
+const resolved = (xml, idNames, refNames) => {
+  const values = (names) =>
+    names.flatMap((name) =>
+      [...xml.matchAll(new RegExp(`(?:<${name}>([^<]*)</${name}>| ${name}="([^"]*)")`, 'g'))].map((m) => m[1] ?? m[2]),
+    );
+  const ids = values(idNames);
+  const refs = values(refNames).flatMap((v) => v.trim().split(/\s+/));
+  assert.equal(new Set(ids).size, ids.length, `duplicate ID in ${xml}`);
+  for (const ref of refs) assert.ok(ids.includes(ref), `${ref} resolves in ${xml}`);
+  return { ids, refs };
+};
+test('IDREF and IDREFS are planned document-wide, forward references included', async () => {
+  const body =
+    '<xs:element name="R"><xs:complexType><xs:sequence><xs:element name="Forward" type="xs:IDREF"/><xs:element name="Entry" maxOccurs="3"><xs:complexType><xs:sequence><xs:element name="No" type="xs:int"/></xs:sequence><xs:attribute name="id" type="xs:ID" use="required"/><xs:attribute name="ref" type="xs:IDREF"/><xs:attribute name="refs" type="xs:IDREFS"/></xs:complexType></xs:element><xs:element name="Target" type="xs:ID"/></xs:sequence></xs:complexType></xs:element>';
+  let refs = 0;
+  for (let seed = 1; seed <= 10; seed += 1) {
+    const sample = await generated(body, { seed, optional: 'random', repeat: 3 });
+    okay(sample);
+    assert.ok(!sample.problems.some((p) => p.code === 'identity-planning'));
+    refs += resolved(sample.xml, ['id', 'Target'], ['Forward', 'ref', 'refs']).refs.length;
+    // JSON carries the planned values, IDREFS as an array.
+    for (const entry of plain(sample.json).Entry) if (entry.refs) assert.ok(Array.isArray(entry.refs));
+  }
+  assert.ok(refs > 20);
+});
+test('a reference with facets of its own gets an ID that meets them', async () => {
+  const body =
+    '<xs:simpleType name="Ref"><xs:restriction base="xs:IDREF"><xs:pattern value="R[0-9]{3}"/></xs:restriction></xs:simpleType><xs:element name="R"><xs:complexType><xs:sequence><xs:element name="Target" type="xs:ID" maxOccurs="2"/><xs:element name="Ref" type="Ref"/></xs:sequence></xs:complexType></xs:element>';
+  const sample = await generated(body, { repeat: 2 });
+  okay(sample);
+  const { refs } = resolved(sample.xml, ['Target'], ['Ref']);
+  assert.match(refs[0], /^R[0-9]{3}$/);
+});
+test('the list schema with IDREFS and IDs is complete', async () => {
+  const body = `${contractList.replace('<xs:element name="Simple">', '<xs:element name="Refs" type="xs:IDREFS" minOccurs="0"/><xs:element name="Entry" minOccurs="0" maxOccurs="2"><xs:complexType><xs:attribute name="id" type="xs:ID" use="required"/></xs:complexType></xs:element><xs:element name="Simple">')}`;
+  const sample = await generated(
+    body,
+    { optional: 'all', repeat: 2 },
+    'xmlns="urn:v:list" targetNamespace="urn:v:list" elementFormDefault="qualified"',
+  );
+  okay(sample);
+  const { refs } = resolved(sample.xml, ['id'], ['Refs']);
+  assert.ok(refs.length >= 1);
+  assert.deepEqual(plain(sample.json).Refs, refs);
+});
+test('references the planner cannot meet, and supplied ones, stay incomplete instead of rewritten', async () => {
+  const noId = await generated(
+    '<xs:element name="R"><xs:complexType><xs:attribute name="ref" type="xs:IDREF" use="required"/></xs:complexType></xs:element>',
+  );
+  assert.equal(noId.valid, true); // libxml2 does not resolve references
+  assert.equal(noId.status, 'incomplete');
+  assert.ok(noId.problems.some((p) => p.code === 'identity-planning' && /names no ID/.test(p.message)));
+  const body =
+    '<xs:element name="R"><xs:complexType><xs:sequence><xs:element name="Target" type="xs:ID"/><xs:element name="Ref" type="xs:IDREF"/></xs:sequence></xs:complexType></xs:element>';
+  const supplied = await generated(body, { samples: { '/R/Ref': 'Foreign' } });
+  assert.match(supplied.xml, /<Ref>Foreign<\/Ref>/);
+  assert.equal(supplied.status, 'incomplete');
+  const matching = await generated(body, { samples: { '/R/Ref': 'Foreign', '/R/Target': 'Foreign' } });
+  okay(matching);
 });
 test('name types and \\i, \\c follow XML 1.0, Second Edition, as libxml2 does', async () => {
   const schemaText = schema(

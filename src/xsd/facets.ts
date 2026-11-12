@@ -130,6 +130,14 @@ export function jsonTypeOf(facets: Facets): 'integer' | 'number' | 'boolean' | '
   return facets.builtin === 'boolean' ? 'boolean' : 'string';
 }
 
+/** The JSON form of a value: its type, or for an xs:list an array with items of that type. */
+export function jsonFormOf(facets: Facets): { type: 'integer' | 'number' | 'boolean' | 'string'; list: boolean } {
+  if (facets.variety === 'list') {
+    return { type: facets.item ? jsonTypeOf(facets.item) : 'string', list: true };
+  }
+  return { type: jsonTypeOf(facets), list: false };
+}
+
 /** Whether the values of a type are or can contain QNames, whose prefixes the document has to declare. */
 export function holdsQNames(facets: Facets): boolean {
   return (

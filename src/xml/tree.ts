@@ -10,13 +10,19 @@ export interface InstanceAttribute {
   ns: string;
   name: string;
   value: string;
+  /** the JSON type of the value, or of each item of a list */
   type: JsonType;
+  /** the value is an xs:list: a JSON array of its space-separated items */
+  list?: boolean;
 }
 
 export interface InstanceText {
   kind: 'text';
   value: string;
+  /** the JSON type of the value, or of each item of a list */
   type: JsonType;
+  /** the value is an xs:list: a JSON array of its space-separated items */
+  list?: boolean;
 }
 
 /** One occurrence of a repeated model group. */
@@ -44,6 +50,12 @@ export interface InstanceElement {
   simpleContent?: boolean;
   /** the prefixes of QName values in this element and its attributes, with their namespaces */
   valueNamespaces?: Record<string, string>;
+  /** written with xsi:nil="true": no children, attributes as its type declares them */
+  nil?: boolean;
+  /** admitted by xs:any; JSON maps it, and everything inside it, without the schema */
+  wildcard?: boolean;
+  /** the type named by xsi:type, a type derived from the declared one */
+  xsiType?: { ns: string; name: string };
 }
 
 export type InstanceNode = InstanceElement | InstanceText;
@@ -63,8 +75,8 @@ export function element(
   };
 }
 
-export function text(value: string, type: JsonType = 'string'): InstanceText {
-  return { kind: 'text', value, type };
+export function text(value: string, type: JsonType = 'string', list = false): InstanceText {
+  return list ? { kind: 'text', value, type, list } : { kind: 'text', value, type };
 }
 
 /** Every element of the tree, the root first. */

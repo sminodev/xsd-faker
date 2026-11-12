@@ -52,54 +52,79 @@ Each root has `name`, `namespace`, `expandedName`, `file`, `abstract` and `entry
 Discovery includes imported global declarations. Automatic selection uses a single declaration in the
 entry document; otherwise provide `root`. Explicit roots accept a local name in the entry namespace,
 a prefix declared on the entry schema, or an expanded name such as `{urn:example:order}Order`.
-An abstract declaration appearing in this list is not a promise of substitution-group support.
+An abstract declaration appears in this list but cannot be generated as the root; generate an element that
+refers to it, and a member is chosen.
 
 ## Options
 
-| Option                           | Default                  | Meaning                                                                                                                                            |
-| -------------------------------- | ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `root`                           | single entry declaration | Global root to generate                                                                                                                            |
-| `seed`                           | `1`                      | First seed; failed attempts advance it                                                                                                             |
-| `optional`                       | `none`                   | Shorthand for both optional-node settings                                                                                                          |
-| `optionalElements`               | `optional`               | `none`, `all` or `random`                                                                                                                          |
-| `optionalAttributes`             | `optional`               | Independent optional attribute setting                                                                                                             |
-| `repeat`                         | `1`                      | Desired occurrences, bounded by XSD minimum and maximum                                                                                            |
-| `choice`                         | `first`                  | `first`, `smallest`, `random`, `{ prefer: [...] }`, or a strategy function                                                                         |
-| `maxDepth`                       | `12`                     | Optional-element expansion depth; root is depth zero. Must be lower than `maxTotalDepth`; without it, the default is lowered below `maxTotalDepth` |
-| `maxTotalDepth`                  | `64`                     | Hard depth limit, including required elements                                                                                                      |
-| `maxNodes`                       | `10000`                  | Hard element-count limit                                                                                                                           |
-| `attempts`                       | `10`                     | Maximum candidate documents per call, at most 100                                                                                                  |
-| `mode`                           | `instance`               | `instance` or `template`; `choice: 'all'` needs template mode                                                                                      |
-| `validate`                       | `true`                   | XML validation; template mode always remains unvalidated                                                                                           |
-| `validator`                      | libxml2/WASM             | Explicit alternative XML validator callback                                                                                                        |
-| `values`                         | facet generator          | Custom value source                                                                                                                                |
-| `profile`                        | none                     | `generic`, `retail`, `insurance`, `logistics`                                                                                                      |
-| `locale`                         | `en`                     | Profile vocabulary; also accepts `de`                                                                                                              |
-| `referenceDate`                  | fixed profile date       | Date used by a selected profile                                                                                                                    |
-| `samples`                        | none                     | Value lists keyed by local-name paths                                                                                                              |
-| `json`                           | compact projection       | `false` disables JSON; otherwise `JsonOptions`                                                                                                     |
-| `indent`                         | two spaces               | XML indentation, up to eight spaces/tabs                                                                                                           |
-| `schemaLocation`                 | none                     | Root schema-assignment hint                                                                                                                        |
-| `prefixes`                       | schema prefixes          | Namespace URI to preferred prefix                                                                                                                  |
-| `fillElements`, `fillAttributes` | `true`                   | Setting either to false requires template mode                                                                                                     |
+| Option                           | Default                  | Meaning                                                                                                                                                                                                                                |
+| -------------------------------- | ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `root`                           | single entry declaration | Global root to generate                                                                                                                                                                                                                |
+| `seed`                           | `1`                      | First seed; failed attempts advance it                                                                                                                                                                                                 |
+| `optional`                       | `none`                   | Shorthand for both optional-node settings                                                                                                                                                                                              |
+| `optionalElements`               | `optional`               | `none`, `all` or `random`                                                                                                                                                                                                              |
+| `optionalAttributes`             | `optional`               | Independent optional attribute setting                                                                                                                                                                                                 |
+| `nil`                            | `never`                  | `random` writes nillable elements as `xsi:nil="true"` with chance one half; `never` draws no random numbers                                                                                                                            |
+| `repeat`                         | `1`                      | Desired occurrences, bounded by XSD minimum and maximum                                                                                                                                                                                |
+| `choice`                         | `first`                  | `first`, `smallest`, `random`, `{ prefer: [...] }`, or a strategy function                                                                                                                                                             |
+| `maxDepth`                       | `12`                     | Optional-element expansion depth; root is depth zero. Must be lower than `maxTotalDepth`; without it, the default is lowered below `maxTotalDepth`                                                                                     |
+| `maxTotalDepth`                  | `64`                     | Hard depth limit, including required elements                                                                                                                                                                                          |
+| `maxNodes`                       | `10000`                  | Hard element-count limit                                                                                                                                                                                                               |
+| `attempts`                       | `10`                     | Maximum candidate documents per call, at most 100                                                                                                                                                                                      |
+| `mode`                           | `instance`               | `instance` or `template`; `choice: 'all'` needs template mode                                                                                                                                                                          |
+| `validate`                       | `true`                   | XML validation; template mode always remains unvalidated                                                                                                                                                                               |
+| `validator`                      | libxml2/WASM             | Explicit alternative XML validator callback                                                                                                                                                                                            |
+| `values`                         | facet generator          | Custom value source                                                                                                                                                                                                                    |
+| `profile`                        | none                     | `generic`, `retail`, `insurance`, `logistics`                                                                                                                                                                                          |
+| `locale`                         | `en`                     | Profile vocabulary; also accepts `de`                                                                                                                                                                                                  |
+| `referenceDate`                  | fixed profile date       | Date used by a selected profile                                                                                                                                                                                                        |
+| `samples`                        | none                     | Value lists keyed by local-name paths                                                                                                                                                                                                  |
+| `json`                           | compact projection       | `false` disables JSON; otherwise `JsonOptions`                                                                                                                                                                                         |
+| `indent`                         | two spaces               | XML indentation, up to eight spaces/tabs                                                                                                                                                                                               |
+| `schemaLocation`                 | none                     | Root schema-assignment hint                                                                                                                                                                                                            |
+| `prefixes`                       | schema prefixes          | Namespace URI to preferred prefix                                                                                                                                                                                                      |
+| `fillElements`, `fillAttributes` | `true`                   | Setting either to false requires template mode                                                                                                                                                                                         |
+| `limits`                         | see meaning              | Schema input limits `{ maxFileBytes, maxTotalBytes, maxDocuments }`, defaults 4194304, 16777216 and 128; positive safe integers only. Also accepted by `listRoots` and the file API, which checks `maxFileBytes` before reading a file |
 
-`choice: 'smallest'` estimates required descendant counts, resolves groups and type inheritance, and
-uses declaration order to break ties. It is not a complete schema satisfiability solver. Cyclic paths
-have infinite cost. Optional particles cost zero even with `optionalElements: 'all'`, so the selected
-branch need not produce the smallest actual output. `{ prefer: [...] }` selects the first declared
-branch mentioning any listed name, with `first` as fallback; the list is not a priority ordering.
+`DEFAULT_LIMITS` holds the default limits. A schema reader of your own returns the text, or `{ text, bytes }`
+(`SchemaText`) to have the limits count the bytes of its file. It can throw `SchemaLimitError` for a file that is
+too large (`resource-limit`), `UnsafeLocationError` for a location it must not read (`unsafe-input`) and
+`SchemaEncodingError` for bytes it cannot decode (`invalid-xml` or `unsupported-encoding`); any other error is
+`missing-file`.
+
+`choice: 'smallest'` selects the branch with the fewest expected elements under the current options,
+resolving groups and type inheritance. Occurrences follow `repeat` within the XSD bounds. Optional
+particles count fully with `optionalElements: 'all'`, not at all with `'none'`, and by half with
+`'random'`, its inclusion chance. From `maxDepth` on they count zero because they are not generated
+there, so optional recursion has a finite cost; required recursion has infinite cost. A nested choice
+counts with its own smallest branch. Ties keep declaration order. Attributes and text are not counted,
+and the estimate is not a schema satisfiability solver. A strategy function receives the same inputs:
+the choice element, its branches, the element path, the schema set, the seeded random source, `depth`
+and `settings` (`optionalElements`, `repeat`, `maxDepth`, `maxTotalDepth`), so it can delegate to
+`smallestBranch`. Strategies also decide substitution groups and `xsi:type`; `kind` tells them apart:
+
+| `kind`         | `node`                                    | `branches`                                                       | `depth`                      |
+| -------------- | ----------------------------------------- | ---------------------------------------------------------------- | ---------------------------- |
+| `choice`       | the `xs:choice`                           | its particles that may occur                                     | element holding the choice   |
+| `substitution` | the `xs:element` particle naming the head | global element declarations, the head first unless abstract      | element holding the particle |
+| `type`         | the element declaration                   | complex type definitions, the declared one first unless abstract | the element itself           |
+
+`smallest` counts a substitution group or a set of types with its smallest alternative.
+`{ prefer: [...] }` selects the first declared branch mentioning any listed name, a member by its name and a
+type by its name, with `first` as fallback; the list is not a priority ordering.
 An unavailable value or a mandatory recursive path can still prevent generation.
 
 The CLI uses the same generation defaults. Its differently named flags map as follows:
 
-| CLI flag                                     | API option / manifest key                               |
-| -------------------------------------------- | ------------------------------------------------------- |
-| `--optional-depth`                           | `maxDepth`                                              |
-| `--max-depth`                                | `maxTotalDepth`                                         |
-| `--values`                                   | `samples` (JSON file contents)                          |
-| `--date`                                     | `referenceDate`                                         |
-| `--base-dir`                                 | `baseDirectory` (file access only)                      |
-| `--schema-location none\|relative\|absolute` | `schemaLocation` (resolved path, or omitted for `none`) |
+| CLI flag                                                   | API option / manifest key                                            |
+| ---------------------------------------------------------- | -------------------------------------------------------------------- |
+| `--optional-depth`                                         | `maxDepth`                                                           |
+| `--max-depth`                                              | `maxTotalDepth`                                                      |
+| `--values`                                                 | `samples` (JSON file contents)                                       |
+| `--date`                                                   | `referenceDate`                                                      |
+| `--base-dir`                                               | `baseDirectory` (file access only)                                   |
+| `--max-file-bytes`, `--max-total-bytes`, `--max-documents` | `limits.maxFileBytes`, `limits.maxTotalBytes`, `limits.maxDocuments` |
+| `--schema-location none\|relative\|absolute`               | `schemaLocation` (resolved path, or omitted for `none`)              |
 
 `values` replaces the selected `profile`; `samples` is tried before that source. To compose more
 sources, use `firstOf`. `locale` and `referenceDate` only affect a selected profile. `coverage: true`
@@ -116,6 +141,39 @@ file setup errors throw; discovery diagnostics are returned in `problems`.
 
 These rejections are distinct from a returned unsuccessful sample. For example, exceeding
 `maxTotalDepth` returns `incomplete` with `depth-limit`; exceeding `maxNodes` rejects immediately.
+
+### Problem codes
+
+Each problem has a `code`, a `severity` and a message. An error prevents a completed status; when it comes from
+loading, from the root or from a resource limit, the call rejects with `GenerateError` and returns neither schema
+nor document. A warning describes a limitation and leaves the status alone.
+
+| Code                                                                    | Severity         | Meaning                                                                                                                                    |
+| ----------------------------------------------------------------------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `missing-file`                                                          | error            | A schema document could not be found or read, or names a URI other than `file:`                                                            |
+| `invalid-xml`                                                           | error            | A schema document is not well-formed XML, has bytes that do not decode, a second byte order mark or text before its XML declaration        |
+| `unsupported-encoding`                                                  | error            | A schema file declares an encoding other than UTF-8, UTF-16, ISO-8859-1 or US-ASCII                                                        |
+| `unsafe-input`                                                          | error            | A location outside the boundary, or a DOCTYPE or entity outside the inert profile; nothing of it is read                                   |
+| `neutralized-doctype`                                                   | warning          | An inert DOCTYPE was left out before parsing and validation                                                                                |
+| `resource-limit`                                                        | error            | A size limit of the schema input, `maxNodes`, or nesting deeper than the generator can follow                                              |
+| `not-a-schema`                                                          | error            | The root of a schema document is not `xs:schema`                                                                                           |
+| `namespace-mismatch`                                                    | error            | An import, include or redefine does not match the target namespace of the document it reads                                                |
+| `duplicate-component`                                                   | error            | Two documents define the same global component                                                                                             |
+| `unknown-prefix`                                                        | error            | A QName uses a prefix that is not declared                                                                                                 |
+| `unsupported-redefine`                                                  | error            | `xs:redefine` of a simple or complex type, or `xs:override`                                                                                |
+| `invalid-redefine`                                                      | error            | A redefined group refers to itself more than once, or with other occurrences than one                                                      |
+| `root-required`                                                         | error            | The entry document declares several global elements and no `root` was given                                                                |
+| `unknown-root`                                                          | error            | The requested `root` is not a global element of the schema set                                                                             |
+| `unknown-element`, `unknown-attribute`, `unknown-group`, `unknown-type` | error            | A reference names no declaration or definition                                                                                             |
+| `circular-group`                                                        | error            | A group or attribute group contains itself                                                                                                 |
+| `circular-type`                                                         | error            | A type derives from itself, also through `xs:list itemType` or a union member                                                              |
+| `invalid-facet`                                                         | error            | A facet value is not valid for its facet                                                                                                   |
+| `depth-limit`                                                           | error            | Required content nests deeper than `maxTotalDepth`                                                                                         |
+| `no-value`                                                              | error            | No value satisfies the facets within the bounded attempts                                                                                  |
+| `unsupported`                                                           | error or warning | A construct the generator cannot produce (error), or a bound it does not plan and leaves to validation (warning)                           |
+| `identity-planning`                                                     | error or warning | An ID or reference that cannot be planned or resolved (error); identity constraints, entities and notations that are not planned (warning) |
+| `template-only`                                                         | warning          | Template output, not an accepted test instance                                                                                             |
+| `json-mapping`                                                          | warning          | The compact JSON form is unavailable for this sample; the XML stays valid                                                                  |
 
 ## Result
 
@@ -189,11 +247,32 @@ console.log(batch.coverage);
 
 `count` is a hard bound from 1 to 1000. Coverage with template mode or `validate: false` rejects with
 `TypeError`. Each batch sample starts after the previous sample's returned seed, including failed
-attempts. Coverage prefers branches not yet accepted in validated XML,
-then less-tried branches. Failed attempts do not count. The report's scope is `encountered-choices`:
+attempts. Coverage prefers branches not yet accepted in validated XML, the less-tried one first. Among
+accepted branches it prefers the one leading to the most open branches of decisions already encountered
+below it, then the less-tried one. Ties keep declaration order; the strategy uses no randomness. Failed
+attempts do not count as covered. A branch not yet accepted that was part of two failed attempts yields
+to the other open branches, and to accepted branches leading to them, then is tried again; once accepted,
+it is treated like any other branch. A failed document does not show which branch caused the failure, so
+this changes only the order of attempts: the branch stays in `total` and in `uncovered`, and is never
+reported as unreachable. The report's scope is `encountered-choices`:
 optional content omitted from generation, unreachable types and combinations of branches are not
-claimed as covered. `complete` means all branches of those encountered choices were accepted at least
-once. Inspect `total` as well: a document with no encountered choices has no choice evidence.
+claimed as covered. `complete` means at least one document was accepted and all branches of the
+encountered choices were accepted at least once. A batch without an accepted document is never
+complete. Inspect `total` as well: an accepted document with no encountered choices is complete with
+`total: 0`, which is no choice evidence.
+
+Choices include substitution groups and the types `xsi:type` can name: each allowed member or concrete
+type is a branch of the decision where it was encountered. A decision with a single alternative, such as an
+abstract type with one concrete derived type, has nothing to cover. For these decisions, `sample.choices`
+entries carry `kind` (`substitution` or `type`) and `alternatives`, the expanded names of all
+alternatives, and `uncovered` entries carry `kind` and the `alternative` that is still open. Coverage
+names reached places in the schema and their alternatives, not combinations or value ranges.
+
+A choice is identified by its place in the schema, not by the element path that reaches it. A choice in
+a named type or group that several elements use therefore counts once. For example, if `Customer` and
+`Supplier` both have the type `Party`, whose content chooses `Street` or `POBox`, a sample with
+`Customer/Street` and another with `Supplier/POBox` complete that choice; `Customer/POBox` need not
+appear in any sample.
 
 ## Filesystem boundary
 

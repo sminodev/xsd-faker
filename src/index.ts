@@ -2,7 +2,9 @@ import type { Element } from '@xmldom/xmldom';
 import {
   type ChoiceContext,
   type ChoiceStrategy,
+  type ChoiceVisit,
   choiceId,
+  type NilMode,
   firstBranch,
   type OptionalMode,
   preferBranches,
@@ -30,7 +32,15 @@ import {
   type SchemaSource,
   XS,
 } from './xsd/schema-set.js';
-export type { ChoiceContext, ChoiceSettings, ChoiceStrategy, OptionalMode } from './generate/walker.js';
+export type {
+  ChoiceContext,
+  ChoiceKind,
+  ChoiceSettings,
+  ChoiceStrategy,
+  ChoiceVisit,
+  NilMode,
+  OptionalMode,
+} from './generate/walker.js';
 export { firstBranch, randomBranch, smallestBranch, preferBranches } from './generate/walker.js';
 export { toJson, JsonMappingError } from './json/serialize.js';
 export type { JsonOptions, JsonValue } from './json/serialize.js';
@@ -51,6 +61,8 @@ export interface GenerateOptions {
   optional?: OptionalMode;
   optionalElements?: OptionalMode;
   optionalAttributes?: OptionalMode;
+  /** Default: never. `random` writes a nillable element without a fixed value as nil with chance one half. */
+  nil?: NilMode;
   repeat?: number;
   choice?:
     | 'first'
@@ -102,11 +114,8 @@ export interface Sample {
   attempts: number;
   errors: string[];
   problems: Problem[];
-  choices: {
-    id: string;
-    branch: number;
-    branches: number;
-  }[];
+  /** The decisions of the document: choices, substitution group members and xsi:type alternatives. */
+  choices: ChoiceVisit[];
 }
 export interface RootElement {
   name: string;
@@ -259,12 +268,19 @@ async function generatePrepared(
       ...(options.optionalElements !== undefined ? { optionalElements: options.optionalElements } : {}),
       ...(options.optionalAttributes !== undefined ? { optionalAttributes: options.optionalAttributes } : {}),
       repeat: options.repeat ?? 1,
+      nil: options.nil ?? 'never',
       choice: strategy(options.choice),
       allBranches: options.choice === 'all',
       maxDepth: options.maxDepth ?? Math.min(12, (options.maxTotalDepth ?? 64) - 1),
       maxTotalDepth: options.maxTotalDepth ?? 64,
       maxNodes: options.maxNodes ?? 10000,
       values,
+      userSupplied: (path, kind) => {
+        if (options.values !== undefined) return true;
+        const parts = [...path];
+        if (kind === 'attribute') parts[parts.length - 1] = `@${parts.at(-1) ?? ''}`;
+        return options.samples !== undefined && Object.hasOwn(options.samples, `/${parts.join('/')}`);
+      },
       rng: createRng(seed),
     });
     let tree: InstanceElement;
@@ -371,9 +387,12 @@ export interface Coverage {
   covered: number;
   total: number;
   complete: boolean;
+  /** Substitution groups and xsi:type also give the kind and the expanded name of the uncovered alternative. */
   uncovered: {
     id: string;
     branch: number;
+    kind?: 'substitution' | 'type';
+    alternative?: string;
   }[];
 }
 export interface SampleBatch {
@@ -394,6 +413,8 @@ export async function generateSamples(input: GenerateInput, options: BatchOption
   }
   const prepared = prepare(input, options);
   const known = new Map<string, number>();
+  /** the kind and alternatives of substitution groups and xsi:type decisions */
+  const named = new Map<string, { kind: 'substitution' | 'type'; alternatives: string[] }>();
   const accepted = new Map<string, Set<number>>();
   const tried = new Map<string, number[]>();
   /** Failed attempts per branch not yet accepted. A failed document does not show which of its branches failed it. */
@@ -473,6 +494,7 @@ export async function generateSamples(input: GenerateInput, options: BatchOption
     samples.push(sample);
     for (const visit of sample.choices) {
       known.set(visit.id, visit.branches);
+      if (visit.kind) named.set(visit.id, { kind: visit.kind, alternatives: visit.alternatives ?? [] });
       if (sample.status === 'valid') {
         const branches = accepted.get(visit.id) ?? new Set<number>();
         branches.add(visit.branch);
@@ -487,7 +509,19 @@ export async function generateSamples(input: GenerateInput, options: BatchOption
     total += branches;
     for (let branch = 0; branch < branches; branch += 1) {
       if (!accepted.get(id)?.has(branch)) {
-        uncovered.push({ id, branch });
+        const alternative = named.get(id);
+        uncovered.push(
+          alternative
+            ? {
+                id,
+                branch,
+                kind: alternative.kind,
+                ...(alternative.alternatives[branch] !== undefined
+                  ? { alternative: alternative.alternatives[branch] }
+                  : {}),
+              }
+            : { id, branch },
+        );
       }
     }
   }

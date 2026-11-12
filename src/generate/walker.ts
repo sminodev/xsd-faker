@@ -16,8 +16,10 @@ import {
   type InstanceNode,
   text,
 } from '../xml/tree.js';
-import { enumerationScope, FacetReader, type Facets, holdsQNames, jsonTypeOf } from '../xsd/facets.js';
+import { enumerationScope, FacetReader, type Facets, holdsQNames, jsonFormOf } from '../xsd/facets.js';
 import type { Problems } from '../xsd/problems.js';
+import { declaredType, expandedName, isAbstract, substitutionCandidates, typeCandidates } from './alternatives.js';
+import { checkIdentities, type IdentitySlot, identityKind, planIdentities } from './identities.js';
 import {
   attr,
   type Component,
@@ -30,12 +32,26 @@ import {
 } from '../xsd/schema-set.js';
 
 export type OptionalMode = 'none' | 'all' | 'random';
+/** Whether nillable elements may be written with xsi:nil="true". */
+export type NilMode = 'never' | 'random';
+
+/** Where a choice comes from: an xs:choice, a substitution group, or the types xsi:type can name. */
+export type ChoiceKind = 'choice' | 'substitution' | 'type';
 
 export interface ChoiceContext {
-  /** the xs:choice element */
+  /**
+   * The xs:choice element; for a substitution group the xs:element particle that refers to the head; for xsi:type
+   * the element declaration.
+   */
   node: Element;
-  /** its particles that may occur (maxOccurs > 0) */
+  /**
+   * The alternatives: the particles of an xs:choice that may occur (maxOccurs > 0); the global element declarations
+   * of a substitution group, the head first unless it is abstract; or the complex type definitions an element may
+   * have, its declared type first unless it is abstract.
+   */
   branches: Element[];
+  /** Default: choice. */
+  kind?: ChoiceKind;
   path: readonly string[];
   set: SchemaSet;
   rng: Rng;
@@ -59,11 +75,13 @@ export interface ChoiceSettings {
 
 /** Chance that `optional: 'random'` includes an optional element or attribute. */
 const RANDOM_OPTIONAL_CHANCE = 0.5;
+/** Chance that `nil: 'random'` writes a nillable element without a fixed value as nil. */
+const RANDOM_NIL_CHANCE = 0.5;
 
 /**
  * How much an optional particle counts when `smallest` estimates a branch: its expected share of the output.
- * `all` generates it, `none` leaves it out, `random` includes it with RANDOM_OPTIONAL_CHANCE. The weight for
- * `random` is a product decision (2026-11-11); change it here and in docs/api.md only.
+ * `all` generates it, `none` leaves it out, `random` includes it with RANDOM_OPTIONAL_CHANCE, so estimate and
+ * generation change together; docs/api.md states the weights.
  */
 export function optionalWeight(mode: OptionalMode): number {
   if (mode === 'all') return 1;
@@ -80,6 +98,8 @@ export interface WalkOptions {
   optionalElements?: OptionalMode;
   optionalAttributes?: OptionalMode;
   allBranches?: boolean;
+  /** Default: never, which draws no random numbers. */
+  nil?: NilMode;
   maxTotalDepth?: number;
   maxNodes?: number;
   /** How often a repeatable element occurs: at least minOccurs, at most maxOccurs. */
@@ -88,6 +108,8 @@ export interface WalkOptions {
   /** Beyond this depth only required content is generated, so recursive types end. */
   maxDepth: number;
   values: ValueSource;
+  /** Whether the caller supplies the value at this path; such ID and IDREF values are checked, not replanned. */
+  userSupplied?: (path: readonly string[], kind: 'element' | 'attribute') => boolean;
   rng: Rng;
 }
 
@@ -102,9 +124,14 @@ export function preferBranches(names: readonly string[], fallback: ChoiceStrateg
   };
 }
 
-/** Whether a particle declares or refers to an element of that local name; looks into model groups, not into types. */
+/**
+ * Whether a particle declares or refers to an element of that local name; looks into model groups, not into types.
+ * A type alternative of xsi:type mentions its own name.
+ */
 function mentions(set: SchemaSet, particle: Element, name: string, seen: Set<Element>): boolean {
   switch (particle.localName) {
+    case 'complexType':
+      return attr(particle, 'name') === name;
     case 'element': {
       const ref = attr(particle, 'ref');
       return (ref === undefined ? attr(particle, 'name') : ref.slice(ref.indexOf(':') + 1)) === name;
@@ -157,6 +184,8 @@ interface ObjectScope {
   groupNames: Map<string, number>;
   /** how many particles declare each element, by expanded name */
   elements: Map<string, number>;
+  /** the local names of declared elements and attributes; content admitted by xs:any must not take them */
+  names: Set<string>;
 }
 
 /** Where a particle writes: its JSON object and the repeated group occurrences around it. */
@@ -169,6 +198,16 @@ const MODEL_GROUPS = ['sequence', 'choice', 'all', 'group'];
 /** Required content nested deeper than maxDepth + this is reported instead of generated. */
 const DEPTH_RESERVE = 25;
 
+/** One decision of a document. Substitution groups and xsi:type also name their alternatives. */
+export interface ChoiceVisit {
+  id: string;
+  branch: number;
+  branches: number;
+  kind?: 'substitution' | 'type';
+  /** the expanded name of each alternative, for substitution groups and xsi:type */
+  alternatives?: string[];
+}
+
 /** A generation budget was exceeded, distinct from errors in user callbacks. */
 export class LimitError extends Error {}
 
@@ -176,7 +215,13 @@ export class Walker {
   private readonly facets: FacetReader;
   private nodes = 0;
   private occurrences = 0;
-  readonly choices: { id: string; branch: number; branches: number }[] = [];
+  /** above zero inside content admitted by xs:any, which JSON maps without the schema: no nil there */
+  private schemaless = 0;
+  /** above zero inside content admitted with processContents="skip", which the validator does not assess */
+  private skipped = 0;
+  /** where IDs and references are written, planned once the tree is complete */
+  private readonly identities: IdentitySlot[] = [];
+  readonly choices: ChoiceVisit[] = [];
   private readonly settings: ChoiceSettings;
 
   constructor(
@@ -195,7 +240,13 @@ export class Walker {
 
   /** The instance of a global element. */
   root(component: Component): InstanceElement {
-    return this.element(component.node, component.doc, [], 0, true) ?? element('', '');
+    const tree = this.element(component.node, component.doc, [], 0, true) ?? element('', '');
+    if (this.identities.length > 0) {
+      planIdentities(this.identities, this.options.rng);
+      // Only this check, never a validator's verdict, clears references: libxml2 does not resolve them.
+      for (const message of checkIdentities(this.identities)) this.problems.error('identity-planning', message);
+    }
+    return tree;
   }
 
   // --- elements ------------------------------------------------------------------------------------------------
@@ -247,43 +298,108 @@ export class Walker {
       );
       return undefined;
     }
-    if (['true', '1'].includes(attr(decl, 'abstract') ?? '')) {
-      this.problems.error(
-        'unsupported',
-        `${name} is abstract; substitution groups are not supported`,
-        this.set.at(decl),
-      );
+    if (isAbstract(decl)) {
+      // A particle that refers to an abstract head takes one of its members; only a root gets here.
+      this.problems.error('unsupported', `${name} is abstract and cannot occur itself`, this.set.at(decl));
     }
     const out = element(ns, name);
     const fixed = attr(decl, 'fixed') ?? attr(decl, 'default');
-    const typeName = attr(decl, 'type');
-    const anonymousComplex = xsChild(decl, 'complexType');
-    const anonymousSimple = xsChild(decl, 'simpleType');
-    if (typeName !== undefined) {
-      const qname = this.set.resolveQName(decl, typeName);
+    // Only 'random' draws a number here, so that 'never' does not change the other choices of a seed.
+    if (
+      this.options.nil === 'random' &&
+      this.schemaless === 0 &&
+      ['true', '1'].includes(attr(decl, 'nillable') ?? '') &&
+      attr(decl, 'fixed') === undefined &&
+      this.options.rng.chance(RANDOM_NIL_CHANCE)
+    ) {
+      out.nil = true;
+    }
+    // A member of a substitution group without a type of its own has the type of its head.
+    const declared = declaredType(this.set, decl);
+    if (declared.kind === 'named') {
+      const qname = declared.qname;
       const complex = qname.ns === XS ? undefined : this.set.lookup('complexType', qname);
-      if (complex && ['true', '1'].includes(attr(complex.node, 'abstract') ?? '')) {
-        this.problems.error(
-          'unsupported',
-          `${name} has the abstract type ${typeName}; choosing a derived type with xsi:type is not supported`,
-          this.set.at(decl),
-        );
-      }
       if (complex) {
-        this.complex(out, complex.node, complex.doc, here, depth, fixed, decl);
+        const chosen = this.typeFor(out, decl, complex, here, depth);
+        if (chosen) this.complex(out, chosen.node, chosen.doc, here, depth, fixed, decl);
+      } else if (out.nil) {
+        // A nil element of a simple type has neither text nor attributes.
       } else if (!(qname.ns === XS && qname.local === 'anyType')) {
-        this.simpleText(out, this.facets.read(qname, decl), here, fixed, decl);
+        this.simpleText(out, this.facets.read(qname, declared.from), here, fixed, decl);
       } else if (fixed !== undefined) {
         out.children = [text(fixed)];
       }
-    } else if (anonymousComplex) {
-      this.complex(out, anonymousComplex, declDoc, here, depth, fixed, decl);
-    } else if (anonymousSimple) {
-      this.simpleText(out, this.facets.read(anonymousSimple), here, fixed, decl);
+    } else if (declared.kind === 'anonymous' && declared.node.localName === 'complexType') {
+      this.complex(out, declared.node, this.set.documentOf(declared.node) ?? declDoc, here, depth, fixed, decl);
+    } else if (out.nil) {
+      // as above
+    } else if (declared.kind === 'anonymous') {
+      this.simpleText(out, this.facets.read(declared.node), here, fixed, decl);
     } else if (fixed !== undefined) {
       out.children = [text(fixed)];
     }
     return out;
+  }
+
+  /**
+   * The complex type an element gets: its declared type, or a type derived from it, written as xsi:type. Chosen like
+   * a branch when there is more than one; an abstract type without a concrete derived type is reported.
+   */
+  private typeFor(
+    out: InstanceElement,
+    decl: Element,
+    declared: Component,
+    path: readonly string[],
+    depth: number,
+  ): Component | undefined {
+    const candidates = typeCandidates(this.set, decl, declared);
+    if (candidates.length === 0) {
+      this.problems.error(
+        'unsupported',
+        `${out.name} has the abstract type ${attr(declared.node, 'name')} and no concrete type derived from it`,
+        this.set.at(decl),
+      );
+      return undefined;
+    }
+    const index = candidates.length === 1 ? 0 : this.decide('type', decl, candidates, path, depth);
+    const chosen = candidates[index] ?? declared;
+    if (chosen.node !== declared.node) {
+      out.xsiType = { ns: chosen.doc.targetNamespace, name: attr(chosen.node, 'name') ?? '' };
+    }
+    return chosen;
+  }
+
+  /** Asks the choice strategy among substitution group members or types, and records the decision. */
+  private decide(
+    kind: 'substitution' | 'type',
+    node: Element,
+    candidates: readonly Component[],
+    path: readonly string[],
+    depth: number,
+  ): number {
+    const index = this.ask({ node, branches: candidates.map((c) => c.node), path, depth, kind });
+    this.choices.push({
+      id: choiceId(this.set, node),
+      branch: index,
+      branches: candidates.length,
+      kind,
+      alternatives: candidates.map(expandedName),
+    });
+    return index;
+  }
+
+  /** The branch the strategy picks, checked. */
+  private ask(context: Pick<ChoiceContext, 'node' | 'branches' | 'path' | 'depth' | 'kind'>): number {
+    const index = this.options.choice({
+      ...context,
+      set: this.set,
+      rng: this.options.rng,
+      settings: this.settings,
+    });
+    if (!Number.isInteger(index) || index < 0 || index >= context.branches.length) {
+      throw new RangeError('choice strategy returned an invalid branch index');
+    }
+    return index;
   }
 
   private simpleText(
@@ -296,7 +412,15 @@ export class Walker {
     this.identityBoundary(facets);
     const value = fixed ?? this.value(facets, path, 'element');
     this.bindPrefixes(out, facets, value, fixed === undefined ? (enumerationScope(facets, value) ?? decl) : decl);
-    out.children = [text(value, jsonTypeOf(facets))];
+    const form = jsonFormOf(facets);
+    const node = text(value, form.type, form.list);
+    out.children = [node];
+    this.identity(facets, path, 'element', fixed !== undefined, {
+      get: () => node.value,
+      set: (v) => {
+        node.value = v;
+      },
+    });
   }
 
   /** The prefixes in a QName value need a declaration in the document; the schema says what they stand for. */
@@ -309,13 +433,34 @@ export class Walker {
     }
   }
 
-  private identityBoundary(facets: Facets): void {
-    if (['IDREF', 'IDREFS'].includes(facets.builtin)) {
+  /** Records an ID or reference for planning; a reference inside a union cannot be planned and is reported. */
+  private identity(
+    facets: Facets,
+    path: readonly string[],
+    kind: 'element' | 'attribute',
+    fixed: boolean,
+    access: Pick<IdentitySlot, 'get' | 'set'>,
+  ): void {
+    const identity = identityKind(facets);
+    if (identity === undefined) return;
+    if (identity === 'unplanned') {
       this.problems.error(
         'identity-planning',
-        'IDREF integrity is not checked by the default validator; reference planning is unsupported',
+        `references in a union at ${path.join('/')} are not planned, and the default validator does not resolve them`,
       );
+      return;
     }
+    this.identities.push({
+      kind: identity,
+      facets,
+      path: path.join('/'),
+      adjustable: !fixed && !(this.options.userSupplied?.(path, kind) ?? false),
+      validated: this.skipped === 0,
+      ...access,
+    });
+  }
+
+  private identityBoundary(facets: Facets): void {
     if (['ENTITY', 'ENTITIES', 'NOTATION'].includes(facets.builtin)) {
       this.problems.warning('identity-planning', 'entity and notation declarations are not used to plan values');
     }
@@ -346,6 +491,10 @@ export class Walker {
   ): void {
     const plan = this.plan(typeNode, doc);
     out.attributes = this.attributes(out, plan.attributes, path, depth);
+    if (out.nil) {
+      // Attributes stay as the type declares them; content is not allowed.
+      return;
+    }
     if (plan.simple) {
       this.simpleText(out, plan.simple, path, fixed, decl);
       out.simpleContent = true;
@@ -363,7 +512,7 @@ export class Walker {
         text(`${generateValue({ builtin: 'string', variety: 'atomic', patterns: [] }, this.options.rng) ?? 'Text'} `),
       );
     }
-    const place = { scope: this.objectScope(plan.groups), trail: [] };
+    const place = { scope: this.objectScope(plan.groups, plan.attributes), trail: [] };
     for (const group of plan.groups) {
       this.particle(group.node, group.doc, path, depth, children, new Set(), place);
     }
@@ -372,9 +521,14 @@ export class Walker {
   }
 
   /** Reads a content model once, branches not taken included, because JSON names must not depend on the sample. */
-  private objectScope(models: readonly { node: Element; doc: SchemaDocument }[]): ObjectScope {
-    const scope: ObjectScope = { keys: new Map(), groupNames: new Map(), elements: new Map() };
+  private objectScope(
+    models: readonly { node: Element; doc: SchemaDocument }[],
+    attributes: ReadonlyMap<string, AttributeUse> = new Map(),
+  ): ObjectScope {
+    const scope: ObjectScope = { keys: new Map(), groupNames: new Map(), elements: new Map(), names: new Set() };
     for (const { node, doc } of models) this.declare(node, doc, scope, new Set());
+    for (const key of [...scope.elements.keys(), ...attributes.keys()])
+      scope.names.add(key.slice(key.indexOf('}') + 1));
     return scope;
   }
 
@@ -388,8 +542,12 @@ export class Walker {
       const name = ref
         ? this.set.resolveQName(node, ref)
         : { ns: qualified ? doc.targetNamespace : '', local: attr(node, 'name') ?? '' };
-      const key = clark(name.ns, name.local);
-      scope.elements.set(key, (scope.elements.get(key) ?? 0) + 1);
+      // The members of a substitution group are declared here as well, each under its own name.
+      const head = ref ? this.set.lookup('element', name) : undefined;
+      const names = head ? substitutionCandidates(this.set, head).map(expandedName) : [clark(name.ns, name.local)];
+      for (const key of names.length > 0 ? names : [clark(name.ns, name.local)]) {
+        scope.elements.set(key, (scope.elements.get(key) ?? 0) + 1);
+      }
     } else if (node.localName === 'group') {
       const group = this.set.lookup('group', this.set.resolveQName(node, attr(node, 'ref') ?? ''));
       if (!group) return;
@@ -422,6 +580,18 @@ export class Walker {
   }
 
   /** Records where a generated element went, for the JSON serializer. */
+  /**
+   * The declarations that may occur for an element particle that refers to the head of a substitution group: the
+   * head unless abstract, and the allowed members. Undefined for a particle without alternatives.
+   */
+  private substitutes(particle: Element): Component[] | undefined {
+    const ref = attr(particle, 'ref');
+    const head = ref === undefined ? undefined : this.set.lookup('element', this.set.resolveQName(particle, ref));
+    if (!head) return undefined;
+    const candidates = substitutionCandidates(this.set, head);
+    return candidates.length === 1 && candidates[0]?.node === head.node ? undefined : candidates;
+  }
+
   private placed(child: InstanceElement, max: number, place: Place): void {
     child.repeatable = max > 1 || (place.scope.elements.get(clark(child.ns, child.name)) ?? 0) > 1;
     if (place.trail.length > 0) child.groups = [...place.trail];
@@ -555,7 +725,15 @@ export class Walker {
       const constrained = attr(use.node, 'fixed') !== undefined || attr(use.node, 'default') !== undefined;
       const scope = fixed === undefined ? (enumerationScope(facets, value) ?? decl) : constrained ? use.node : decl;
       this.bindPrefixes(owner, facets, value, scope);
-      out.push({ ns, name, value, type: jsonTypeOf(facets) });
+      const form = jsonFormOf(facets);
+      const attribute: InstanceAttribute = { ns, name, value, type: form.type, ...(form.list ? { list: true } : {}) };
+      out.push(attribute);
+      this.identity(facets, [...path, name], 'attribute', fixed !== undefined, {
+        get: () => attribute.value,
+        set: (v) => {
+          attribute.value = v;
+        },
+      });
     }
     return out;
   }
@@ -603,15 +781,40 @@ export class Walker {
     const times = this.count(min, max, depth);
     if (times > (this.options.maxNodes ?? 10000)) throw new LimitError('particle occurrence count exceeds maxNodes');
     switch (node.localName) {
-      case 'element':
+      case 'element': {
+        const members = this.substitutes(node);
+        if (members?.length === 0 && times > 0) {
+          this.problems.error(
+            'unsupported',
+            `${attr(node, 'ref')} is abstract and no member of its substitution group may replace it`,
+            this.set.at(node),
+          );
+          return;
+        }
         for (let k = 0; k < times; k += 1) {
-          const child = this.element(node, doc, path, depth + 1, false);
-          if (child) {
-            this.placed(child, max, place);
-            out.push(child);
+          if (!members) {
+            const child = this.element(node, doc, path, depth + 1, false);
+            if (child) {
+              this.placed(child, max, place);
+              out.push(child);
+            }
+            continue;
+          }
+          // A template writes every member; an instance one per occurrence of the particle.
+          const indices = this.options.allBranches
+            ? members.map((_, i) => i)
+            : [members.length === 1 ? 0 : this.decide('substitution', node, members, path, depth)];
+          for (const index of indices) {
+            const member = members[index];
+            const child = member && this.element(member.node, member.doc, path, depth + 1, true);
+            if (child) {
+              this.placed(child, max, place);
+              out.push(child);
+            }
           }
         }
         return;
+      }
       case 'sequence':
       case 'all': {
         const members = xsChildren(node);
@@ -628,25 +831,14 @@ export class Walker {
         const branches = xsChildren(node).filter((c) => occurs(c).max > 0);
         const enter = this.entering(node, max, place, branches, doc);
         for (let k = 0; k < times && branches.length > 0; k += 1) {
-          const index = this.options.choice({
-            node,
-            branches,
-            path,
-            set: this.set,
-            rng: this.options.rng,
-            depth,
-            settings: this.settings,
-          });
-          if (!Number.isInteger(index) || index < 0 || index >= branches.length) {
-            throw new RangeError('choice strategy returned an invalid branch index');
-          }
+          const index = this.ask({ node, branches, path, depth, kind: 'choice' });
+          // A template writes every branch; in XML each one is an occurrence of the choice of its own.
           const indices = this.options.allBranches ? branches.map((_, i) => i) : [index];
-          const inner = enter();
           for (const selected of indices) {
             const branch = branches[selected];
             if (branch) {
               this.choices.push({ id: choiceId(this.set, node), branch: selected, branches: branches.length });
-              this.particle(branch, doc, path, depth, out, groups, inner);
+              this.particle(branch, doc, path, depth, out, groups, enter());
             }
           }
         }
@@ -672,7 +864,7 @@ export class Walker {
       }
       case 'any':
         for (let k = 0; k < times; k += 1) {
-          const child = this.wildcard(node, doc, path, depth + 1);
+          const child = this.wildcard(node, doc, path, depth + 1, place.scope.names);
           if (child) {
             this.placed(child, max, place);
             out.push(child);
@@ -686,13 +878,15 @@ export class Walker {
 
   /**
    * An element for xs:any: a global element of an allowed namespace if the schema has one; otherwise, unless the
-   * wildcard is strict, an element of our own in an allowed namespace.
+   * wildcard is strict, an element of our own in an allowed namespace. Names declared in the same JSON object are
+   * left out, because the schemaless JSON mapping of wildcard content would collide with them.
    */
   private wildcard(
     node: Element,
     doc: SchemaDocument,
     path: readonly string[],
     depth: number,
+    declared: ReadonlySet<string>,
   ): InstanceElement | undefined {
     const spec = (attr(node, 'namespace') ?? '##any').trim().split(/\s+/);
     const allowed = (ns: string) =>
@@ -707,12 +901,23 @@ export class Walker {
     const candidates = [...this.set.components.element.values()].filter(
       (c) =>
         allowed(c.doc.targetNamespace) &&
-        attr(c.node, 'abstract') !== 'true' &&
-        !path.includes(attr(c.node, 'name') ?? ''),
+        !isAbstract(c.node) &&
+        !path.includes(attr(c.node, 'name') ?? '') &&
+        !declared.has(attr(c.node, 'name') ?? ''),
     );
     if (candidates.length > 0) {
       const chosen = this.options.rng.pick(candidates);
-      return this.element(chosen.node, chosen.doc, path, depth, true);
+      const skip = attr(node, 'processContents') === 'skip' ? 1 : 0;
+      this.schemaless += 1;
+      this.skipped += skip;
+      try {
+        const out = this.element(chosen.node, chosen.doc, path, depth, true);
+        if (out) out.wildcard = true;
+        return out;
+      } finally {
+        this.schemaless -= 1;
+        this.skipped -= skip;
+      }
     }
     if ((attr(node, 'processContents') ?? 'strict') === 'strict') {
       this.problems.error(
@@ -731,7 +936,11 @@ export class Walker {
           : first.startsWith('##')
             ? 'urn:xsd-faker:any'
             : first;
-    return element(ns, 'any', { children: [text('any content')] });
+    let name = 'any';
+    for (let n = 2; declared.has(name); n += 1) name = `any${n}`;
+    const out = element(ns, name, { children: [text('any content')] });
+    out.wildcard = true;
+    return out;
   }
 }
 
@@ -762,7 +971,7 @@ export function choiceId(set: SchemaSet, node: Element): string {
 
 /** Settings assumed by `smallest` when a caller builds a ChoiceContext without them: required content, once. */
 const REQUIRED_ONLY: ChoiceSettings = { optionalElements: 'none', repeat: 1, maxDepth: 12, maxTotalDepth: 64 };
-const PARTICLES = new Set(['element', 'sequence', 'choice', 'all', 'group', 'any']);
+const PARTICLES = new Set(['element', 'sequence', 'choice', 'all', 'group', 'any', 'complexType']);
 const estimators = new WeakMap<SchemaSet, Map<string, (particle: Element, depth: number) => number>>();
 
 /**
@@ -822,9 +1031,15 @@ function estimator(set: SchemaSet, settings: ChoiceSettings): (particle: Element
       case 'element': {
         if (depth + 1 > settings.maxTotalDepth) return Infinity;
         const ref = attr(node, 'ref');
-        const decl = ref === undefined ? node : set.lookup('element', set.resolveQName(node, ref))?.node;
-        return decl ? 1 + content(decl, depth + 1) : Infinity;
+        if (ref === undefined) return 1 + content(node, depth + 1);
+        // A substitution group counts with its smallest allowed member, like a nested choice.
+        const head = set.lookup('element', set.resolveQName(node, ref));
+        const members = head ? substitutionCandidates(set, head) : [];
+        return members.length > 0 ? Math.min(...members.map((m) => 1 + content(m.node, depth + 1))) : Infinity;
       }
+      case 'complexType':
+        // A type xsi:type can name, for the element at `depth`.
+        return depth > settings.maxTotalDepth ? Infinity : 1 + typeContent(node, depth);
       case 'sequence':
       case 'all':
         return sum(xsChildren(node), depth);
@@ -843,14 +1058,18 @@ function estimator(set: SchemaSet, settings: ChoiceSettings): (particle: Element
     }
   };
   const content = (decl: Element, depth: number): number => {
-    const typeName = attr(decl, 'type');
-    if (typeName !== undefined) {
-      const qname = set.resolveQName(decl, typeName);
+    const declared = declaredType(set, decl);
+    if (declared.kind === 'named') {
+      const qname = declared.qname;
       const complex = qname.ns === XS ? undefined : set.lookup('complexType', qname);
-      return complex ? typeContent(complex.node, depth) : 0;
+      if (!complex) return 0;
+      // The types xsi:type can name count with the smallest one.
+      const types = typeCandidates(set, decl, complex);
+      return types.length > 0 ? Math.min(...types.map((t) => typeContent(t.node, depth))) : Infinity;
     }
-    const anonymous = xsChild(decl, 'complexType');
-    return anonymous ? typeContent(anonymous, depth) : 0;
+    return declared.kind === 'anonymous' && declared.node.localName === 'complexType'
+      ? typeContent(declared.node, depth)
+      : 0;
   };
   const typeContent = (type: Element, depth: number): number =>
     guarded(type, depth, () => {
@@ -904,7 +1123,25 @@ export function reachableChoices(set: SchemaSet, particle: Element, followOption
     }
     for (const child of xsChildren(derivation ?? type)) visit(child);
   };
+  /** A declaration: its type, or with several types xsi:type can name, that decision and each of the types. */
+  const visitDeclaration = (decl: Element): void => {
+    const declared = declaredType(set, decl);
+    if (declared.kind === 'named') {
+      const qname = declared.qname;
+      const complex = qname.ns === XS ? undefined : set.lookup('complexType', qname);
+      if (!complex) return;
+      const types = typeCandidates(set, decl, complex);
+      if (types.length > 1) out.push(decl);
+      for (const type of types) visitType(type.node);
+    } else if (declared.kind === 'anonymous' && declared.node.localName === 'complexType') {
+      visitType(declared.node);
+    }
+  };
   const visit = (node: Element): void => {
+    if (node.localName === 'complexType') {
+      visitType(node);
+      return;
+    }
     if (seen.has(node) || !PARTICLES.has(node.localName ?? '')) return;
     seen.add(node);
     const { min, max } = occurs(node);
@@ -912,16 +1149,15 @@ export function reachableChoices(set: SchemaSet, particle: Element, followOption
     switch (node.localName) {
       case 'element': {
         const ref = attr(node, 'ref');
-        const decl = ref === undefined ? node : set.lookup('element', set.resolveQName(node, ref))?.node;
-        const typeName = decl && attr(decl, 'type');
-        if (decl && typeName !== undefined) {
-          const qname = set.resolveQName(decl, typeName);
-          const complex = qname.ns === XS ? undefined : set.lookup('complexType', qname);
-          if (complex) visitType(complex.node);
-        } else if (decl) {
-          const anonymous = xsChild(decl, 'complexType');
-          if (anonymous) visitType(anonymous);
+        const head = ref === undefined ? undefined : set.lookup('element', set.resolveQName(node, ref));
+        if (ref === undefined) {
+          visitDeclaration(node);
+          return;
         }
+        // A substitution group is a decision of its own, and each member a branch below it.
+        const members = head ? substitutionCandidates(set, head) : [];
+        if (members.length > 1) out.push(node);
+        for (const member of members) visitDeclaration(member.node);
         return;
       }
       case 'choice':

@@ -21,6 +21,9 @@ export function checkOptions(options: GenerateOptions): void {
       throw new TypeError(`${name} must be none, all or random`);
     }
   }
+  if (options.nil !== undefined && options.nil !== 'never' && options.nil !== 'random') {
+    throw new TypeError('nil must be never or random');
+  }
   if (options.mode !== undefined && options.mode !== 'instance' && options.mode !== 'template') {
     throw new TypeError('mode must be instance or template');
   }

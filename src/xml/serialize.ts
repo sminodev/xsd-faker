@@ -36,7 +36,8 @@ export function planNamespaces(
   preferred: ReadonlyMap<string, string> = new Map(),
 ): NamespacePlan {
   const all = [...elements(root)];
-  const unqualified = all.some((e) => e.ns === '');
+  // An xsi:type value without prefix would mean the default namespace, so a type without namespace excludes it.
+  const unqualified = all.some((e) => e.ns === '' || e.xsiType?.ns === '');
   const defaultNs = root.ns !== '' && !unqualified ? root.ns : undefined;
   const needPrefix: string[] = [];
   const add = (ns: string) => {
@@ -52,6 +53,14 @@ export function planNamespaces(
     }
     for (const a of e.attributes) {
       add(a.ns);
+    }
+    if (e.nil) {
+      add(XSI);
+    }
+    if (e.xsiType) {
+      // The type's namespace needs a prefix, even where it is the default namespace of element names.
+      add(XSI);
+      add(e.xsiType.ns);
     }
     for (const [prefix, ns] of Object.entries(e.valueNamespaces ?? {})) {
       valuePrefixes.set(prefix, (valuePrefixes.get(prefix) ?? new Set()).add(ns));
@@ -119,6 +128,10 @@ function writer(plan: NamespacePlan, indent: string) {
         .filter(([prefix, ns]) => plan.prefixes.get(ns) !== prefix)
         .map(([prefix, ns]) => `xmlns:${prefix}="${escapeAttribute(ns)}"`),
       ...node.attributes.map((a) => `${qname(a.ns, a.name, true)}="${escapeAttribute(a.value)}"`),
+      ...(node.xsiType
+        ? [`${qname(XSI, 'type', true)}="${escapeAttribute(qname(node.xsiType.ns, node.xsiType.name, true))}"`]
+        : []),
+      ...(node.nil ? [`${qname(XSI, 'nil', true)}="true"`] : []),
     ];
     const open = attributes.length > 0 ? `<${name} ${attributes.join(' ')}` : `<${name}`;
     if (node.children.length === 0) {
@@ -185,6 +198,11 @@ function declarationsFor(root: InstanceElement, plan: NamespacePlan): string[] {
   for (const e of elements(root)) {
     use(e.ns, false);
     for (const a of e.attributes) use(a.ns, true);
+    if (e.nil) use(XSI, true);
+    if (e.xsiType) {
+      use(XSI, true);
+      use(e.xsiType.ns, true);
+    }
     // A QName value whose prefix the document declares at its root needs the declaration here.
     for (const [prefix, ns] of Object.entries(e.valueNamespaces ?? {})) {
       if (plan.prefixes.get(ns) === prefix) prefixes.set(prefix, ns);

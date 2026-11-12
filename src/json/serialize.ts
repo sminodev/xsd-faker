@@ -1,5 +1,9 @@
 import { type NamespacePlan, planNamespaces, serializeMixed } from '../xml/serialize.js';
-import type { InstanceElement, InstanceText, JsonType } from '../xml/tree.js';
+import type { InstanceAttribute, InstanceElement, InstanceText, JsonType } from '../xml/tree.js';
+
+const XSI = 'http://www.w3.org/2001/XMLSchema-instance';
+/** XML whitespace, which separates list items; other Unicode spaces do not. */
+const XML_SPACE = /[ \t\n\r]+/;
 export type JsonValue =
   | null
   | boolean
@@ -63,6 +67,18 @@ function primitive(value: string, type: JsonType, numbers: JsonOptions['numbers'
   }
   return number;
 }
+/** A typed value; an xs:list becomes an array of its items, each typed, and an empty list `[]`. */
+function typed(value: string, type: JsonType, list: boolean | undefined, numbers: JsonOptions['numbers']): JsonValue {
+  if (!list) {
+    return primitive(value, type, numbers);
+  }
+  const trimmed = value.replace(/^[ \t\n\r]+|[ \t\n\r]+$/g, '');
+  return trimmed === '' ? [] : trimmed.split(XML_SPACE).map((item) => primitive(item, type, numbers));
+}
+/** Attributes that become JSON properties: xsi:* control the instance and are never data. */
+function dataAttributes(node: InstanceElement): InstanceAttribute[] {
+  return node.attributes.filter((attribute) => attribute.ns !== XSI);
+}
 /**
  * Serializes the same instance used for XML. Collisions fail instead of overwriting data.
  *
@@ -107,6 +123,15 @@ export function toJson(
       if (!group && list.some((item) => item.ns !== child.ns)) {
         throw new JsonMappingError(`namespace collision at ${owner}/${child.name}; use mode: 'tree'`);
       }
+      // Content of xs:any never shares a property with a declared element, nor takes the text property.
+      if (
+        !group &&
+        (list.some((item) => !item.wildcard !== !child.wildcard) || (child.wildcard && key === textProperty))
+      ) {
+        throw new JsonMappingError(
+          `property collision at ${owner}/${child.name}: wildcard content and a declared name; use mode: 'tree'`,
+        );
+      }
       list.push(child);
       properties.set(key, list);
     }
@@ -127,6 +152,9 @@ export function toJson(
           return item.result;
         });
         put(key, `repeated group ${key}`, items);
+      } else if (first.wildcard) {
+        // Without the schema, the form follows the count: several occurrences are an array, one is a value.
+        put(key, `element {${first.ns}}${key}`, list.length > 1 ? list.map(generic) : generic(first));
       } else {
         put(
           key,
@@ -136,36 +164,107 @@ export function toJson(
       }
     }
   };
-  const visit = (node: InstanceElement): JsonValue => {
+  /**
+   * Content admitted by xs:any, mapped without the schema: an element without attributes and children is its text,
+   * unchanged; otherwise an object with the attributes as strings, the children by the same rule, and the text under
+   * the text property. Children together with text that is not only whitespace keep the mixed form, an XML fragment.
+   * Whitespace between children is formatting and left out.
+   */
+  const generic = (node: InstanceElement): JsonValue => {
+    const attributes = dataAttributes(node);
     const children = node.children.filter((child): child is InstanceElement => child.kind === 'element');
     const texts = node.children.filter((child): child is InstanceText => child.kind === 'text');
+    const content = texts.map((part) => part.value).join('');
+    if (attributes.length === 0 && children.length === 0) {
+      return content;
+    }
+    const { result, put } = object(node.name);
+    const name = (local: string, identity: string): string => {
+      if (local === textProperty) {
+        throw new JsonMappingError(`property collision at ${node.name}/${local}: ${identity} and the text property`);
+      }
+      return local;
+    };
+    for (const attribute of attributes) {
+      const identity = `attribute {${attribute.ns}}${attribute.name}`;
+      put(name(attribute.name, identity), identity, attribute.value);
+    }
+    if (children.length > 0 && /[^ \t\n\r]/.test(content)) {
+      plan ??= planNamespaces(root, prefixes);
+      put(textProperty, 'mixed content', serializeMixed(node, plan));
+      return result;
+    }
+    const byName = new Map<string, InstanceElement[]>();
+    for (const child of children) {
+      const list = byName.get(child.name) ?? [];
+      if (list.some((item) => item.ns !== child.ns)) {
+        throw new JsonMappingError(`namespace collision at ${node.name}/${child.name}; use mode: 'tree'`);
+      }
+      list.push(child);
+      byName.set(child.name, list);
+    }
+    for (const [local, list] of byName) {
+      const identity = `element {${list[0]?.ns ?? ''}}${local}`;
+      put(name(local, identity), identity, list.length > 1 ? list.map(generic) : generic(list[0] ?? node));
+    }
+    if (children.length === 0 && texts.length > 0) {
+      put(textProperty, 'text', content);
+    }
+    return result;
+  };
+  const visit = (node: InstanceElement): JsonValue => {
+    if (node.wildcard) {
+      return generic(node);
+    }
+    const children = node.children.filter((child): child is InstanceElement => child.kind === 'element');
+    const texts = node.children.filter((child): child is InstanceText => child.kind === 'text');
+    const attributes = dataAttributes(node);
+    // xsi:type is written as `#type` with the expanded name, for complex types and simple content. A value of a
+    // simple type has no JSON form for another type: the tree names a type only where it differs from the declared one.
+    const type = node.xsiType && `{${node.xsiType.ns}}${node.xsiType.name}`;
+    if (type && !node.simpleContent && !node.mixed && children.length === 0 && texts.length > 0) {
+      throw new JsonMappingError(`xsi:type ${type} on ${node.name}, an element of a simple type, has no JSON form`);
+    }
+    if (node.nil && attributes.length === 0 && !type) {
+      return null;
+    }
     if (
+      !type &&
+      !node.nil &&
       !node.mixed &&
       !node.simpleContent &&
-      node.attributes.length === 0 &&
+      attributes.length === 0 &&
       children.length === 0 &&
       texts.length > 0
     ) {
-      return primitive(texts.map((part) => part.value).join(''), texts[0]?.type ?? 'string', options.numbers);
+      const first = texts[0];
+      return typed(texts.map((part) => part.value).join(''), first?.type ?? 'string', first?.list, options.numbers);
     }
     const { result, put } = object(node.name);
-    for (const attribute of node.attributes) {
+    if (type) {
+      put('#type', 'xsi:type', type);
+    }
+    for (const attribute of attributes) {
       put(
         attribute.name,
         `attribute {${attribute.ns}}${attribute.name}`,
-        primitive(attribute.value, attribute.type, options.numbers),
+        typed(attribute.value, attribute.type, attribute.list, options.numbers),
       );
     }
-    if (node.mixed) {
+    if (node.nil) {
+      // A nil element with attributes: the attributes and a null text property, never children.
+      put(textProperty, 'nil content', null);
+    } else if (node.mixed) {
       plan ??= planNamespaces(root, prefixes);
       put(textProperty, 'mixed content', serializeMixed(node, plan));
     } else {
       writeElements(node.name, put, children, 0);
       if (texts.length > 0) {
+        const first = texts[0];
         put(
           textProperty,
           'simple content',
-          primitive(texts.map((part) => part.value).join(''), texts[0]?.type ?? 'string', options.numbers),
+          typed(texts.map((part) => part.value).join(''), first?.type ?? 'string', first?.list, options.numbers),
         );
       }
     }
