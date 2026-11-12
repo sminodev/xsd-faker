@@ -919,6 +919,32 @@ test('smallest handles a shared forty-level type graph within a second', async (
   assert.match(sample.xml, /<Small>/);
   assert.ok(performance.now() - start < 1000);
 });
+test('name types and \\i, \\c follow XML 1.0, Second Edition, as libxml2 does', async () => {
+  const schemaText = schema(
+    '<xs:element name="R"><xs:complexType><xs:sequence><xs:element name="N" type="xs:NCName" maxOccurs="unbounded"/><xs:element name="P" maxOccurs="unbounded"><xs:simpleType><xs:restriction base="xs:string"><xs:pattern value="\\i\\c*"/></xs:restriction></xs:simpleType></xs:element><xs:element name="D" maxOccurs="unbounded"><xs:simpleType><xs:restriction base="xs:string"><xs:pattern value="\\d+"/></xs:restriction></xs:simpleType></xs:element></xs:sequence></xs:complexType></xs:element>',
+  );
+  const files = new Map([['a.xsd', schemaText]]);
+  // ä, ą: letters of the Second Edition, ŀ is none; a\u0301: combining mark after a letter; ١: Arabic-Indic digit,
+  // allowed after a letter. The Fifth Edition would accept all rejected ones except \u0301a.
+  const names = ['ä', 'aą', 'a\u0301', 'a١', 'aŀ', 'ǅa', 'Ⅻ', '١a', '\u0301a', 'Ĳ', 'a\u{10000}', '\u{10000}'];
+  const expected = [true, true, true, true, false, false, false, false, false, false, false, false];
+  const doc = (n) => `<R><N>${n}</N><P>${n}</P><D>١٢٣</D></R>`;
+  const verdicts = await validator({ entry: 'a.xsd', files }, names.map(doc));
+  assert.deepEqual(
+    verdicts.map((v) => v.valid),
+    expected,
+  );
+  // The generator's own check agrees: a value only XML 1.0, Fifth Edition allows is not generated.
+  const literal = await generated(
+    '<xs:element name="R"><xs:simpleType><xs:restriction base="xs:NCName"><xs:pattern value="ǅa|Ⅻ"/></xs:restriction></xs:simpleType></xs:element>',
+  );
+  assert.equal(literal.status, 'incomplete');
+  assert.ok(literal.problems.some((p) => p.code === 'no-value'));
+  const allowed = await generated(
+    '<xs:element name="R"><xs:simpleType><xs:restriction base="xs:NCName"><xs:pattern value="[äą][a-z]\\c"/></xs:restriction></xs:simpleType></xs:element>',
+  );
+  okay(allowed);
+});
 test('IDREF cannot produce a false successful status', async () => {
   const sample = await generated(
     '<xs:element name="R"><xs:complexType><xs:attribute name="id" type="xs:ID" use="required"/><xs:attribute name="ref" type="xs:IDREF" use="required" fixed="missing"/></xs:complexType></xs:element>',

@@ -80,3 +80,26 @@ describe('checkValue', () => {
     expect(checkValue(facets, value)).toEqual(expect.any(String));
   });
 });
+
+describe('name characters of XML 1.0, Second Edition', () => {
+  it.each<[string, boolean]>([
+    ['ä', true],
+    ['aą', true],
+    ['aŀ', false],
+    ['á', true],
+    ['a١', true],
+    ['ǅa', false],
+    ['Ⅻ', false],
+    ['١a', false],
+    ['́a', false],
+    ['Ĳ', false],
+    ['a\u{10000}', false],
+  ])('NCName %s: %s', (value, valid) => {
+    expect(checkValue(atomic('NCName'), value) === undefined).toBe(valid);
+    expect(checkValue(atomic('string', { patterns: [['\\i\\c*']] }), value) === undefined).toBe(valid);
+  });
+
+  it('keeps \\d independent of the name tables', () => {
+    expect(checkValue(atomic('string', { patterns: [['\\d{3}']] }), '١٢٣')).toBeUndefined();
+  });
+});

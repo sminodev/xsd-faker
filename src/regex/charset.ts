@@ -5,6 +5,8 @@
 // and c. A subset is always safe: every generated string still matches the pattern. A class written with characters
 // outside ASCII, such as [ä-ü], keeps them.
 
+import { NAME_CHAR as NAME_CHAR_CLASS, NAME_START_CHAR } from '../xsd/namechars.js';
+
 /** An inclusive range of code points. */
 export interface Range {
   from: number;
@@ -95,9 +97,9 @@ export function fromRegExp(source: string): CharSet {
   return normalize(ranges);
 }
 
-// The multi-character escapes of XML Schema, restricted to the universe.
-const NAME_START = fromRegExp('[:A-Z_a-z]');
-const NAME_CHAR = union(NAME_START, fromRegExp('[\\-.0-9]'));
+// The multi-character escapes of XML Schema, restricted to the universe; \i and \c as XML 1.0, Second Edition.
+const NAME_START = fromRegExp(`[${NAME_START_CHAR}]`);
+const NAME_CHAR = fromRegExp(`[${NAME_CHAR_CLASS}]`);
 const SPACE = fromRegExp('[ \\t\\n\\r]');
 const WORD = fromRegExp('[^\\p{P}\\p{Z}\\p{C}]');
 
