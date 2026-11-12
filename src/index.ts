@@ -238,7 +238,13 @@ function source(options: GenerateOptions): ValueSource {
       : facetValues);
   return options.samples ? firstOf(valueLists(options.samples), base) : base;
 }
-async function generatePrepared(prepared: Prepared, options: GenerateOptions): Promise<Sample> {
+/** Called after each attempt with its branch trace and status; coverage uses it to plan the next choices. */
+type AttemptObserver = (choices: Sample['choices'], status: SampleStatus) => void;
+async function generatePrepared(
+  prepared: Prepared,
+  options: GenerateOptions,
+  observe?: AttemptObserver,
+): Promise<Sample> {
   const template = options.mode === 'template';
   const validate = !template && (options.validate ?? true);
   const attempts = validate ? (options.attempts ?? 10) : 1;
@@ -341,6 +347,7 @@ async function generatePrepared(prepared: Prepared, options: GenerateOptions): P
       problems: issues,
       choices: walker.choices,
     };
+    observe?.(walker.choices, status);
     if (!validate || status === 'valid') {
       return last;
     }
@@ -373,6 +380,8 @@ export interface SampleBatch {
   samples: Sample[];
   coverage: Coverage;
 }
+/** Failed attempts after which a branch not yet accepted yields to other open branches in coverage planning. */
+const FAILURE_LIMIT = 2;
 /** Bounded branch exploration. Coverage counts accepted XML instances, not attempts or templates. */
 export async function generateSamples(input: GenerateInput, options: BatchOptions = {}): Promise<SampleBatch> {
   checkOptions(options);
@@ -387,8 +396,12 @@ export async function generateSamples(input: GenerateInput, options: BatchOption
   const known = new Map<string, number>();
   const accepted = new Map<string, Set<number>>();
   const tried = new Map<string, number[]>();
+  /** Failed attempts per branch not yet accepted. A failed document does not show which of its branches failed it. */
+  const failures = new Map<string, number[]>();
   const reach = new Map<Element, string[]>();
-  /** Branches still open in the choices already encountered below this branch. */
+  const penalized = (id: string, branch: number): boolean =>
+    !accepted.get(id)?.has(branch) && (failures.get(id)?.[branch] ?? 0) >= FAILURE_LIMIT;
+  /** Branches still open, and not penalized, in the choices already encountered below this branch. */
   const openBelow = (context: ChoiceContext, branch: Element): number => {
     let ids = reach.get(branch);
     if (!ids) {
@@ -396,19 +409,31 @@ export async function generateSamples(input: GenerateInput, options: BatchOption
       ids = [...new Set(reachableChoices(context.set, branch, follow).map((node) => choiceId(context.set, node)))];
       reach.set(branch, ids);
     }
-    return ids.reduce((open, id) => open + Math.max(0, (known.get(id) ?? 0) - (accepted.get(id)?.size ?? 0)), 0);
+    let open = 0;
+    for (const id of ids) {
+      for (let b = 0; b < (known.get(id) ?? 0); b += 1) {
+        if (!accepted.get(id)?.has(b) && !penalized(id, b)) open += 1;
+      }
+    }
+    return open;
   };
-  // Not yet accepted branches first, the less tried one first. Among accepted branches, the one leading to the most
-  // open branches of encountered choices, then the less tried one. Ties keep declaration order; no randomness.
+  // Tiers, then the less tried branch; ties keep declaration order, and nothing here is random:
+  // 0. open branches;
+  // 1. accepted branches that lead to open branches of encountered choices, the most of them first;
+  // 2. open branches that failed FAILURE_LIMIT attempts without an accepted document, fewest failures first;
+  // 3. other accepted branches.
+  // A penalized branch is tried again as soon as tiers 0 and 1 are empty, and the penalty ends once it is accepted.
   const balanced: ChoiceStrategy = (context) => {
     const id = choiceId(context.set, context.node);
     known.set(id, context.branches.length);
     const attempts = tried.get(id) ?? context.branches.map(() => 0);
     const score = (branch: number): [number, number, number] => {
       const tries = attempts[branch] ?? 0;
+      if (penalized(id, branch)) return [2, failures.get(id)?.[branch] ?? 0, tries];
       if (!accepted.get(id)?.has(branch)) return [0, tries, 0];
       const node = context.branches[branch];
-      return [1, node ? -openBelow(context, node) : 0, tries];
+      const open = node ? openBelow(context, node) : 0;
+      return open > 0 ? [1, -open, tries] : [3, tries, 0];
     };
     const lower = (a: readonly number[], b: readonly number[]): boolean => {
       const i = a.findIndex((value, k) => value !== b[k]);
@@ -427,14 +452,24 @@ export async function generateSamples(input: GenerateInput, options: BatchOption
     tried.set(id, attempts);
     return selected;
   };
+  // Only planning uses failures; they never make a branch unreachable or remove it from the coverage total.
+  const recordFailures: AttemptObserver = (choices, status) => {
+    if (status === 'valid') return;
+    for (const visit of choices) {
+      if (accepted.get(visit.id)?.has(visit.branch)) continue;
+      const counts = failures.get(visit.id) ?? Array.from({ length: visit.branches }, () => 0);
+      counts[visit.branch] = (counts[visit.branch] ?? 0) + 1;
+      failures.set(visit.id, counts);
+    }
+  };
   const samples: Sample[] = [];
   let seed = options.seed ?? 1;
   for (let i = 0; i < count; i += 1) {
-    const sample = await generatePrepared(prepared, {
-      ...options,
-      seed,
-      ...(options.coverage ? { choice: balanced } : {}),
-    });
+    const sample = await generatePrepared(
+      prepared,
+      { ...options, seed, ...(options.coverage ? { choice: balanced } : {}) },
+      options.coverage ? recordFailures : undefined,
+    );
     samples.push(sample);
     for (const visit of sample.choices) {
       known.set(visit.id, visit.branches);
@@ -462,7 +497,8 @@ export async function generateSamples(input: GenerateInput, options: BatchOption
       scope: 'encountered-choices',
       total,
       covered: total - uncovered.length,
-      complete: uncovered.length === 0,
+      // Without an accepted document nothing was shown, even where the schema has no choice.
+      complete: uncovered.length === 0 && samples.some((sample) => sample.status === 'valid'),
       uncovered,
     },
   };

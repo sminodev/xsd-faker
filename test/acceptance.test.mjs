@@ -555,6 +555,41 @@ test('a chameleon include takes the namespace of each document that includes it'
   const { roots } = listRoots({ entry: 'main.xsd', files });
   assert.deepEqual(roots.map((r) => r.expandedName).sort(), ['{urn:a}Note', '{urn:m}Note', '{urn:m}R']);
 });
+test('coverage tries other open branches after a route keeps failing, and returns to it later', async () => {
+  // B never validates. Without a penalty every later sample takes B again and Y below A stays open.
+  const body = rootChoice(
+    '<xs:element name="A"><xs:complexType><xs:choice><xs:element name="X" type="xs:string"/><xs:element name="Y" type="xs:string"/></xs:choice></xs:complexType></xs:element>',
+    '<xs:element name="B" type="xs:string"/>',
+  );
+  const rejectB = async (schemas, documents) =>
+    documents.map((xml) =>
+      xml.includes('<B>') ? { valid: false, errors: ['B rejected'] } : { valid: true, errors: [] },
+    );
+  const batch = await generateSamples(input(body), { ...options, validator: rejectB, count: 5, coverage: true });
+  assert.deepEqual(batch.samples.map(taken), ['A', 'B', 'B', 'A', 'B']);
+  assert.match(batch.samples[3].xml, /<Y>/);
+  // B stays in the denominator and is reported as uncovered, not as unreachable.
+  assert.equal(batch.coverage.total, 4);
+  assert.equal(batch.coverage.covered, 3);
+  assert.deepEqual(
+    batch.coverage.uncovered.map((u) => u.branch),
+    [1],
+  );
+  const within = await generateSamples(input(body), { validator: rejectB, count: 2, coverage: true });
+  // Within the attempts of one sample: two failures with B, then A with the open Y.
+  assert.equal(within.samples[1].status, 'valid');
+  assert.equal(within.samples[1].attempts, 3);
+  assert.match(within.samples[1].xml, /<Y>/);
+});
+test('coverage is never complete without an accepted document', async () => {
+  const rejected = async (schemas, documents) => documents.map(() => ({ valid: false, errors: ['rejected'] }));
+  const none = await generateSamples(simple, { ...options, count: 2, coverage: true, validator: rejected });
+  assert.equal(none.coverage.total, 0);
+  assert.equal(none.coverage.complete, false);
+  const plainSchema = await generateSamples(simple, { ...options, count: 1, coverage: true });
+  assert.equal(plainSchema.coverage.total, 0);
+  assert.equal(plainSchema.coverage.complete, true);
+});
 test('optional recursion terminates without dropping required content', async () => {
   const body =
     '<xs:element name="Root" type="Node"/><xs:complexType name="Node"><xs:sequence><xs:element name="Code" type="xs:string"/><xs:element name="Child" type="Node" minOccurs="0"/></xs:sequence></xs:complexType>';
