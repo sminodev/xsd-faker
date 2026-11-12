@@ -134,7 +134,9 @@ function writer(plan: NamespacePlan, indent: string) {
       ...(node.nil ? [`${qname(XSI, 'nil', true)}="true"`] : []),
     ];
     const open = attributes.length > 0 ? `<${name} ${attributes.join(' ')}` : `<${name}`;
-    if (node.children.length === 0) {
+    // An element without content closes itself, also when its content is an empty text, so that XML and the
+    // fragments of mixed content in JSON spell it alike.
+    if (node.children.every((c) => c.kind === 'text' && c.value === '')) {
       return `${open}/>`;
     }
     // Text content is written as it is; only element-only content is indented.

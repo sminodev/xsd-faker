@@ -158,3 +158,13 @@ describe('serializeXml', () => {
     expect(escapeAttribute('a"b<c&d\ne')).toBe('a&quot;b&lt;c&amp;d&#10;e');
   });
 });
+
+describe('elements without content', () => {
+  it('close themselves in XML and in mixed fragments alike, also with an empty text', () => {
+    const br = element(A, 'br', { children: [text('')] });
+    const root = element(A, 'p', { children: [text('a'), br, text('b')] });
+    root.mixed = true;
+    expect(serializeXml(root, { declaration: false })).toBe('<p xmlns="urn:a">a<br/>b</p>\n');
+    expect(serializeMixed(root, planNamespaces(root))).toBe('a<br xmlns="urn:a"/>b');
+  });
+});
