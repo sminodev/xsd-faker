@@ -155,6 +155,8 @@ export class SchemaSet {
   /** Exact texts parsed for this run; validation must use the same bytes. */
   readonly sourceTexts = new Map<string, string>();
   private loadedBytes = 0;
+  /** Each group or attribute group redefined in xs:redefine, with the definition it replaces. */
+  private readonly replaced = new Map<Element, Component>();
   /**
    * By path, and by path and namespace for chameleon copies; null while a document is being loaded or if it could
    * not be loaded.
@@ -267,11 +269,95 @@ export class SchemaSet {
             at,
           );
         }
-      } else if (child.localName === 'redefine' || child.localName === 'override') {
-        this.problems.error('unsupported-redefine', `xs:${child.localName} is not supported`, at);
+      } else if (child.localName === 'redefine') {
+        this.redefine(child, doc, at);
+      } else if (child.localName === 'override') {
+        this.problems.error('unsupported-redefine', 'xs:override is not supported', at);
       }
     }
     return doc;
+  }
+
+  /**
+   * xs:redefine: includes a document and replaces its groups and attribute groups. A self-reference in the new
+   * definition means the one it replaces; every other reference, also from the redefined document, the new one.
+   * Redefined types are not supported.
+   */
+  private redefine(node: Element, doc: SchemaDocument, at: At & { node: Element }): void {
+    const location = attr(node, 'schemaLocation');
+    if (location === undefined) {
+      this.problems.error('missing-file', 'xs:redefine without schemaLocation', at);
+      return;
+    }
+    const target = this.load(resolvePath(doc.path, location), at, doc.targetNamespace);
+    if (target && target.targetNamespace !== doc.targetNamespace) {
+      this.problems.error(
+        'namespace-mismatch',
+        `${target.path} has the target namespace "${target.targetNamespace}" and cannot be redefined into "${doc.targetNamespace}"`,
+        at,
+      );
+      return;
+    }
+    for (const definition of xsChildren(node)) {
+      const here = { file: doc.path, node: definition };
+      const kind = definition.localName;
+      const name = attr(definition, 'name') ?? '';
+      if (kind === 'simpleType' || kind === 'complexType') {
+        this.problems.error('unsupported-redefine', `redefining xs:${kind} ${name} is not supported`, here);
+        continue;
+      }
+      if ((kind !== 'group' && kind !== 'attributeGroup') || name === '') {
+        this.problems.error('invalid-redefine', `xs:redefine cannot contain xs:${kind ?? ''}`, here);
+        continue;
+      }
+      const id = clark(doc.targetNamespace, name);
+      const previous = this.components[kind].get(id);
+      if (!target || !previous) {
+        if (target) this.problems.error('unknown-group', `xs:redefine of ${kind} ${name}: no such ${kind}`, here);
+        continue;
+      }
+      const selves = [...definition.getElementsByTagNameNS(XS, kind)].filter((ref) => {
+        const value = attr(ref, 'ref');
+        if (value === undefined) return false;
+        const qname = this.resolveQName(ref, value);
+        return clark(qname.ns, qname.local) === id;
+      });
+      if (selves.length > 1) {
+        this.problems.error(
+          'invalid-redefine',
+          `the redefinition of ${kind} ${name} refers to itself more than once`,
+          here,
+        );
+        continue;
+      }
+      const self = selves[0];
+      if (self && kind === 'group' && (attr(self, 'minOccurs') ?? '1') !== '1') {
+        this.problems.error('invalid-redefine', `the self-reference of group ${name} must occur exactly once`, here);
+        continue;
+      }
+      if (self && kind === 'group' && (attr(self, 'maxOccurs') ?? '1') !== '1') {
+        this.problems.error('invalid-redefine', `the self-reference of group ${name} must occur exactly once`, here);
+        continue;
+      }
+      this.replaced.set(definition, previous);
+      this.components[kind].set(id, { node: definition, doc });
+    }
+  }
+
+  /**
+   * The group or attribute group a `ref` refers to. Inside the redefinition of a group of that name, it is the
+   * definition the redefinition replaces.
+   */
+  reference(kind: 'group' | 'attributeGroup', node: Element): Component | undefined {
+    const name = this.resolveQName(node, attr(node, 'ref') ?? '');
+    for (let up = node.parentNode; up; up = up.parentNode) {
+      const previous = isElement(up) ? this.replaced.get(up) : undefined;
+      if (!previous || !isElement(up)) continue;
+      const own = clark(this.documentOf(up)?.targetNamespace ?? '', attr(up, 'name') ?? '');
+      if (up.localName === kind && own === clark(name.ns, name.local)) return previous;
+      break;
+    }
+    return this.lookup(kind, name);
   }
 
   /** The text of a schema file, read and checked once; undefined after a reported problem. */

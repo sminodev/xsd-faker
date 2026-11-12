@@ -1005,6 +1005,35 @@ test('DOCTYPE is rejected before parsing', async () => {
     /DOCTYPE/,
   );
 });
+test('xs:redefine of a group and an attribute group with self-references gives the ordinary form', async () => {
+  const files = {
+    'schema.xsd':
+      '<?xml version="1.0" encoding="UTF-8"?>\n<!-- xs:redefine of a group and an attribute group with a self-reference (extension). -->\n<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns="urn:v:red" targetNamespace="urn:v:red" elementFormDefault="qualified">\n  <xs:redefine schemaLocation="base.xsd">\n    <xs:group name="G"><xs:sequence><xs:group ref="G"/><xs:element name="b" type="xs:string"/></xs:sequence></xs:group>\n    <xs:attributeGroup name="AG"><xs:attributeGroup ref="AG"/><xs:attribute name="y" type="xs:string"/></xs:attributeGroup>\n  </xs:redefine>\n  <xs:element name="R">\n    <xs:complexType>\n      <xs:sequence><xs:group ref="G"/></xs:sequence>\n      <xs:attributeGroup ref="AG"/>\n    </xs:complexType>\n  </xs:element>\n</xs:schema>\n',
+    'base.xsd':
+      '<?xml version="1.0" encoding="UTF-8"?>\n<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns="urn:v:red" targetNamespace="urn:v:red" elementFormDefault="qualified">\n  <xs:group name="G"><xs:sequence><xs:element name="a" type="xs:string"/></xs:sequence></xs:group>\n  <xs:attributeGroup name="AG"><xs:attribute name="x" type="xs:string"/></xs:attributeGroup>\n</xs:schema>\n',
+  };
+  for (const seed of [1, 2, 3]) {
+    const sample = await generateSample({ entry: 'schema.xsd', files }, { ...options, seed, optional: 'all' });
+    okay(sample);
+    assert.deepEqual(Object.keys(sample.json), ['x', 'y', 'a', 'b']);
+    assert.ok(Object.values(sample.json).every((value) => typeof value === 'string'));
+  }
+  // A required attribute added by the redefinition is written too; the old definition alone would leave it out.
+  const required = {
+    ...files,
+    'schema.xsd': files['schema.xsd'].replace('name="y" type="xs:string"', 'name="y" type="xs:string" use="required"'),
+  };
+  const minimal = await generateSample({ entry: 'schema.xsd', files: required }, options);
+  okay(minimal);
+  assert.deepEqual(Object.keys(minimal.json), ['y', 'a', 'b']);
+  const typeRedefined = {
+    ...files,
+    'schema.xsd': files['schema.xsd'].replace('</xs:redefine>', '<xs:complexType name="K"/></xs:redefine>'),
+  };
+  await assert.rejects(generateSample({ entry: 'schema.xsd', files: typeRedefined }, options), (error) =>
+    error.problems.some((p) => p.code === 'unsupported-redefine'),
+  );
+});
 test('missing imports fail before a sample is returned', async () => {
   await assert.rejects(
     generated(

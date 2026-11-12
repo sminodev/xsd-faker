@@ -14,6 +14,7 @@ export const PROBLEM_CODES = [
   // mistakes in the XML Schema
   'circular-group',
   'circular-type',
+  'invalid-redefine',
   'invalid-facet',
   'unknown-attribute',
   'unknown-element',

@@ -79,7 +79,7 @@ describe('SchemaSet', () => {
     expect(problems[0]).toMatchObject({ file: 'a.xsd', line: 2, message: 'schema document gone.xsd not found' });
   });
 
-  it('reports an include of another target namespace and xs:redefine, which it does not apply', () => {
+  it('reports an include and a redefine of another target namespace', () => {
     const { problems } = load(
       {
         'a.xsd': `<xs:schema ${XS} targetNamespace="urn:a">
@@ -92,10 +92,87 @@ describe('SchemaSet', () => {
     );
     expect(problems).toEqual([
       expect.objectContaining({ code: 'namespace-mismatch', line: 2 }),
-      expect.objectContaining({ code: 'unsupported-redefine', line: 3 }),
+      expect.objectContaining({ code: 'namespace-mismatch', line: 3 }),
     ]);
   });
 
+  describe('xs:redefine', () => {
+    const base = `<xs:schema ${XS} xmlns="urn:r" targetNamespace="urn:r">
+      <xs:group name="G"><xs:sequence><xs:element name="a" type="xs:string"/></xs:sequence></xs:group>
+      <xs:group name="User"><xs:sequence><xs:group ref="G"/></xs:sequence></xs:group>
+      <xs:attributeGroup name="AG"><xs:attribute name="x"/><xs:attribute name="z"/></xs:attributeGroup>
+      <xs:complexType name="T"/>
+    </xs:schema>`;
+    const redefining = (inner: string, extra = '') => ({
+      'base.xsd': base,
+      'mid.xsd': `<xs:schema ${XS} xmlns="urn:r" targetNamespace="urn:r">${extra}<xs:redefine schemaLocation="base.xsd">${inner}</xs:redefine></xs:schema>`,
+    });
+    const extended =
+      '<xs:group name="G"><xs:sequence><xs:group ref="G"/><xs:element name="b" type="xs:string"/></xs:sequence></xs:group>';
+
+    it('replaces a group everywhere and lets a self-reference mean the replaced one', () => {
+      const { set, problems } = load(redefining(extended), 'mid.xsd');
+      expect(problems).toEqual([]);
+      const g = set.lookup('group', { ns: 'urn:r', local: 'G' })!;
+      expect(set.pathOf(g.node)).toBe('mid.xsd');
+      const self = g.node.getElementsByTagNameNS('http://www.w3.org/2001/XMLSchema', 'group')[0]!;
+      expect(set.pathOf(set.reference('group', self)!.node)).toBe('base.xsd');
+      // A reference from the redefined document itself also gets the new definition.
+      const user = set.lookup('group', { ns: 'urn:r', local: 'User' })!;
+      const ref = user.node.getElementsByTagNameNS('http://www.w3.org/2001/XMLSchema', 'group')[0]!;
+      expect(set.reference('group', ref)).toBe(g);
+    });
+
+    it('chains redefinitions, and a restriction replaces without inheriting', () => {
+      const files = {
+        ...redefining(extended),
+        'top.xsd': `<xs:schema ${XS} xmlns="urn:r" targetNamespace="urn:r"><xs:redefine schemaLocation="mid.xsd">${extended}<xs:attributeGroup name="AG"><xs:attribute name="x"/></xs:attributeGroup></xs:redefine></xs:schema>`,
+      };
+      const { set, problems } = load(files, 'top.xsd');
+      expect(problems).toEqual([]);
+      const top = set.lookup('group', { ns: 'urn:r', local: 'G' })!;
+      const self = (c: { node: import('@xmldom/xmldom').Element }) =>
+        c.node.getElementsByTagNameNS('http://www.w3.org/2001/XMLSchema', 'group')[0]!;
+      const mid = set.reference('group', self(top))!;
+      expect([set.pathOf(top.node), set.pathOf(mid.node), set.pathOf(set.reference('group', self(mid))!.node)]).toEqual(
+        ['top.xsd', 'mid.xsd', 'base.xsd'],
+      );
+      const ag = set.lookup('attributeGroup', { ns: 'urn:r', local: 'AG' })!;
+      expect(ag.node.getElementsByTagNameNS('http://www.w3.org/2001/XMLSchema', 'attribute')).toHaveLength(1);
+    });
+
+    it('applies to a chameleon document in the namespace it is redefined into', () => {
+      const { set, problems } = load(
+        {
+          'base.xsd': base.replace(' xmlns="urn:r" targetNamespace="urn:r"', ''),
+          'mid.xsd': redefining(extended)['mid.xsd'],
+        },
+        'mid.xsd',
+      );
+      expect(problems).toEqual([]);
+      const g = set.lookup('group', { ns: 'urn:r', local: 'G' })!;
+      const self = g.node.getElementsByTagNameNS('http://www.w3.org/2001/XMLSchema', 'group')[0]!;
+      expect(set.pathOf(set.reference('group', self)!.node)).toBe('base.xsd');
+    });
+
+    it('refuses redefined types, xs:override, missing targets and invalid self-references', () => {
+      const codes = (files: Record<string, string>, entry = 'mid.xsd') =>
+        load(files, entry).problems.map((p) => p.code);
+      expect(codes(redefining('<xs:complexType name="T"/>'))).toEqual(['unsupported-redefine']);
+      expect(codes(redefining('<xs:group name="Missing"><xs:sequence/></xs:group>'))).toEqual(['unknown-group']);
+      expect(
+        codes(
+          redefining('<xs:group name="G"><xs:sequence><xs:group ref="G"/><xs:group ref="G"/></xs:sequence></xs:group>'),
+        ),
+      ).toEqual(['invalid-redefine']);
+      expect(
+        codes(redefining('<xs:group name="G"><xs:sequence><xs:group ref="G" maxOccurs="2"/></xs:sequence></xs:group>')),
+      ).toEqual(['invalid-redefine']);
+      expect(codes({ 'a.xsd': `<xs:schema ${XS}><xs:override schemaLocation="b.xsd"/></xs:schema>` }, 'a.xsd')).toEqual(
+        ['unsupported-redefine'],
+      );
+    });
+  });
   it('loads a chameleon include once per namespace it is included into', () => {
     const { set, problems } = load(
       {

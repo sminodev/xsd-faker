@@ -141,7 +141,7 @@ function mentions(set: SchemaSet, particle: Element, name: string, seen: Set<Ele
     case 'all':
       return xsChildren(particle).some((c) => mentions(set, c, name, seen));
     case 'group': {
-      const group = set.lookup('group', set.resolveQName(particle, attr(particle, 'ref') ?? ''));
+      const group = set.reference('group', particle);
       if (!group || seen.has(group.node)) {
         return false;
       }
@@ -549,7 +549,7 @@ export class Walker {
         scope.elements.set(key, (scope.elements.get(key) ?? 0) + 1);
       }
     } else if (node.localName === 'group') {
-      const group = this.set.lookup('group', this.set.resolveQName(node, attr(node, 'ref') ?? ''));
+      const group = this.set.reference('group', node);
       if (!group) return;
       if (max > 1) {
         claimGroupKey(scope, group.node, attr(group.node, 'name') ?? '');
@@ -672,7 +672,7 @@ export class Walker {
         }
       } else if (child.localName === 'attributeGroup') {
         const ref = attr(child, 'ref') ?? '';
-        const group = this.set.lookup('attributeGroup', this.set.resolveQName(child, ref));
+        const group = this.set.reference('attributeGroup', child);
         if (!group) {
           this.problems.error('unknown-group', `attribute group ${ref} is not defined`, this.set.at(child));
         } else if (seen.has(group.node)) {
@@ -846,7 +846,7 @@ export class Walker {
       }
       case 'group': {
         const ref = attr(node, 'ref') ?? '';
-        const group = this.set.lookup('group', this.set.resolveQName(node, ref));
+        const group = this.set.reference('group', node);
         if (!group) {
           this.problems.error('unknown-group', `group ${ref} is not defined`, this.set.at(node));
           return;
@@ -1048,7 +1048,7 @@ function estimator(set: SchemaSet, settings: ChoiceSettings): (particle: Element
         return branches.length > 0 ? Math.min(...branches.map((b) => occurrence(b, depth))) : 0;
       }
       case 'group': {
-        const group = set.lookup('group', set.resolveQName(node, attr(node, 'ref') ?? ''));
+        const group = set.reference('group', node);
         return group ? guarded(group.node, depth, () => sum(xsChildren(group.node), depth)) : Infinity;
       }
       case 'any':
@@ -1169,7 +1169,7 @@ export function reachableChoices(set: SchemaSet, particle: Element, followOption
         for (const child of xsChildren(node)) visit(child);
         return;
       case 'group': {
-        const group = set.lookup('group', set.resolveQName(node, attr(node, 'ref') ?? ''));
+        const group = set.reference('group', node);
         if (group) for (const child of xsChildren(group.node)) visit(child);
         return;
       }
