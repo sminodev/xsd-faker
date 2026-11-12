@@ -1,10 +1,13 @@
+import type { Element } from '@xmldom/xmldom';
 import {
+  type ChoiceContext,
   type ChoiceStrategy,
   choiceId,
   firstBranch,
   type OptionalMode,
   preferBranches,
   randomBranch,
+  reachableChoices,
   smallestBranch,
   Walker,
   LimitError,
@@ -27,7 +30,7 @@ import {
   type SchemaSource,
   XS,
 } from './xsd/schema-set.js';
-export type { ChoiceContext, ChoiceStrategy, OptionalMode } from './generate/walker.js';
+export type { ChoiceContext, ChoiceSettings, ChoiceStrategy, OptionalMode } from './generate/walker.js';
 export { firstBranch, randomBranch, smallestBranch, preferBranches } from './generate/walker.js';
 export { toJson, JsonMappingError } from './json/serialize.js';
 export type { JsonOptions, JsonValue } from './json/serialize.js';
@@ -384,19 +387,42 @@ export async function generateSamples(input: GenerateInput, options: BatchOption
   const known = new Map<string, number>();
   const accepted = new Map<string, Set<number>>();
   const tried = new Map<string, number[]>();
+  const reach = new Map<Element, string[]>();
+  /** Branches still open in the choices already encountered below this branch. */
+  const openBelow = (context: ChoiceContext, branch: Element): number => {
+    let ids = reach.get(branch);
+    if (!ids) {
+      const follow = (context.settings?.optionalElements ?? 'none') !== 'none';
+      ids = [...new Set(reachableChoices(context.set, branch, follow).map((node) => choiceId(context.set, node)))];
+      reach.set(branch, ids);
+    }
+    return ids.reduce((open, id) => open + Math.max(0, (known.get(id) ?? 0) - (accepted.get(id)?.size ?? 0)), 0);
+  };
+  // Not yet accepted branches first, the less tried one first. Among accepted branches, the one leading to the most
+  // open branches of encountered choices, then the less tried one. Ties keep declaration order; no randomness.
   const balanced: ChoiceStrategy = (context) => {
     const id = choiceId(context.set, context.node);
     known.set(id, context.branches.length);
     const attempts = tried.get(id) ?? context.branches.map(() => 0);
+    const score = (branch: number): [number, number, number] => {
+      const tries = attempts[branch] ?? 0;
+      if (!accepted.get(id)?.has(branch)) return [0, tries, 0];
+      const node = context.branches[branch];
+      return [1, node ? -openBelow(context, node) : 0, tries];
+    };
+    const lower = (a: readonly number[], b: readonly number[]): boolean => {
+      const i = a.findIndex((value, k) => value !== b[k]);
+      return i >= 0 && (a[i] ?? 0) < (b[i] ?? 0);
+    };
     let selected = 0;
-    let best = Infinity;
-    context.branches.forEach((_, branch) => {
-      const score = (accepted.get(id)?.has(branch) ? 1000000 : 0) + (attempts[branch] ?? 0);
-      if (score < best) {
-        best = score;
+    let best = score(0);
+    for (let branch = 1; branch < context.branches.length; branch += 1) {
+      const candidate = score(branch);
+      if (lower(candidate, best)) {
+        best = candidate;
         selected = branch;
       }
-    });
+    }
     attempts[selected] = (attempts[selected] ?? 0) + 1;
     tried.set(id, attempts);
     return selected;

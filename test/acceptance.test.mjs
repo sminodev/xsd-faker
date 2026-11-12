@@ -409,6 +409,84 @@ test('smallest branch resolves descendants rather than only immediate children',
   assert.match(sample.xml, /<Small>/);
   assert.doesNotMatch(sample.xml, /<Large>/);
 });
+const strings = (names, optional = false) =>
+  names.map((n) => `<xs:element name="${n}" type="xs:string"${optional ? ' minOccurs="0"' : ''}/>`).join('');
+const branch = (name, required, optional = []) =>
+  `<xs:element name="${name}"><xs:complexType><xs:sequence>${strings(required)}${strings(optional, true)}</xs:sequence></xs:complexType></xs:element>`;
+const rootChoice = (...branches) =>
+  `<xs:element name="Root"><xs:complexType><xs:choice>${branches.join('')}</xs:choice></xs:complexType></xs:element>`;
+const taken = (sample) => sample.xml.match(/<Root>\s*<(\w+)/)?.[1];
+test('smallest counts optional content as the optional-element setting generates it', async () => {
+  // A: 2 required children. B: 1 required child and 5 optional ones.
+  const body = rootChoice(branch('A', ['a1', 'a2']), branch('B', ['b1'], ['o1', 'o2', 'o3', 'o4', 'o5']));
+  const all = await generated(body, { choice: 'smallest', optional: 'all' });
+  okay(all);
+  assert.equal(taken(all), 'A');
+  const none = await generated(body, { choice: 'smallest', optional: 'none' });
+  okay(none);
+  assert.equal(taken(none), 'B');
+});
+test('smallest weighs optional content by half with optional random', async () => {
+  // Expected elements with none / random / all: A 1/5/9, B 5/5/5, C 2/4/6.
+  const body = rootChoice(
+    branch('A', [], ['a1', 'a2', 'a3', 'a4', 'a5', 'a6', 'a7', 'a8']),
+    branch('B', ['b1', 'b2', 'b3', 'b4']),
+    branch('C', ['c1'], ['c2', 'c3', 'c4', 'c5']),
+  );
+  const expected = { none: 'A', random: 'C', all: 'B' };
+  for (const [optional, name] of Object.entries(expected)) {
+    for (const seed of [1, 2, 3]) {
+      const sample = await generated(body, { choice: 'smallest', optional, seed });
+      okay(sample);
+      assert.equal(taken(sample), name, `${optional} / seed ${seed}`);
+    }
+  }
+});
+test('smallest keeps the first branch on a tie in the expected output', async () => {
+  // Both produce two elements under optional all; Second has fewer required children.
+  const body = rootChoice(branch('First', ['f1']), branch('Second', [], ['s1']));
+  const sample = await generated(body, { choice: 'smallest', optional: 'all' });
+  okay(sample);
+  assert.equal(taken(sample), 'First');
+});
+test('smallest follows optional recursion only as deep as generation does', async () => {
+  // Rec nests itself optionally: 2 elements per level until maxDepth stops optional content. Flat has 3 elements.
+  const body = `<xs:complexType name="T"><xs:sequence><xs:element name="v" type="xs:string"/><xs:element name="Rec" type="T" minOccurs="0"/></xs:sequence></xs:complexType>${rootChoice(
+    '<xs:element name="Rec" type="T"/>',
+    branch('Flat', ['f1', 'f2']),
+  )}`;
+  const shallow = await generated(body, { choice: 'smallest', optional: 'all', maxDepth: 1 });
+  okay(shallow);
+  assert.equal(taken(shallow), 'Rec');
+  const deep = await generated(body, { choice: 'smallest', optional: 'all', maxDepth: 3 });
+  okay(deep);
+  assert.equal(taken(deep), 'Flat');
+  const required = await generated(body, { choice: 'smallest', optional: 'none' });
+  okay(required);
+  assert.equal(taken(required), 'Rec');
+});
+test('smallest treats required recursion as infinite but optional recursion as finite', async () => {
+  const body = `<xs:complexType name="Loop"><xs:sequence><xs:element name="Again" type="Loop"/></xs:sequence></xs:complexType><xs:complexType name="T"><xs:sequence><xs:element name="v" type="xs:string"/><xs:element name="Rec" type="T" minOccurs="0"/></xs:sequence></xs:complexType>${rootChoice(
+    '<xs:element name="Again" type="Loop"/>',
+    '<xs:element name="Rec" type="T"/>',
+  )}`;
+  const sample = await generated(body, { choice: 'smallest', optional: 'all' });
+  okay(sample);
+  assert.equal(taken(sample), 'Rec');
+});
+test('smallest counts occurrences as repeat requests them, within the XSD bounds', async () => {
+  // A: 1 child, repeatable up to 5 times. B: 3 required children.
+  const body = rootChoice(
+    '<xs:element name="A"><xs:complexType><xs:sequence><xs:element name="a" type="xs:string" maxOccurs="5"/></xs:sequence></xs:complexType></xs:element>',
+    branch('B', ['b1', 'b2', 'b3']),
+  );
+  const once = await generated(body, { choice: 'smallest', repeat: 1 });
+  okay(once);
+  assert.equal(taken(once), 'A');
+  const many = await generated(body, { choice: 'smallest', repeat: 9 });
+  okay(many);
+  assert.equal(taken(many), 'B');
+});
 test('all branches require an explicit template request', async () => {
   await assert.rejects(generated(choice, { choice: 'all' }), /requires mode/);
   const sample = await generated(choice, { choice: 'all', mode: 'template' });
@@ -426,6 +504,24 @@ test('separate branch samples produce accepted coverage', async () => {
   assert.equal(batch.coverage.covered, 3);
   assert.equal(batch.coverage.complete, true);
   assert.equal(batch.coverage.scope, 'encountered-choices');
+});
+test('coverage looks ahead to open branches below an accepted branch', async () => {
+  // Only C leads to a further choice. Rotation alone would take A again in the fourth sample.
+  const body = rootChoice(
+    '<xs:element name="A" type="xs:string"/>',
+    '<xs:element name="B" type="xs:string"/>',
+    '<xs:element name="C"><xs:complexType><xs:choice><xs:element name="X" type="xs:string"/><xs:element name="Y" type="xs:string"/></xs:choice></xs:complexType></xs:element>',
+  );
+  const batch = await generateSamples(input(body), { ...options, count: 4, coverage: true });
+  batch.samples.forEach(okay);
+  assert.deepEqual(batch.samples.map(taken), ['A', 'B', 'C', 'C']);
+  assert.equal(batch.coverage.total, 5);
+  assert.equal(batch.coverage.complete, true);
+  const again = await generateSamples(input(body), { ...options, count: 4, coverage: true });
+  assert.deepEqual(
+    again.samples.map((s) => s.xml),
+    batch.samples.map((s) => s.xml),
+  );
 });
 test('coverage reports bounded incompleteness', async () => {
   const batch = await generateSamples(input(choice), { ...options, count: 1, coverage: true });

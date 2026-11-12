@@ -39,6 +39,36 @@ export interface ChoiceContext {
   path: readonly string[];
   set: SchemaSet;
   rng: Rng;
+  /** Depth of the element whose content holds the choice; the root element is depth 0. */
+  depth?: number;
+  /** The settings that decide how much content a branch produces. Without them: required content, once. */
+  settings?: ChoiceSettings;
+}
+
+/** The generation settings a choice strategy can take into account. */
+export interface ChoiceSettings {
+  /** effective optional-element policy */
+  optionalElements: OptionalMode;
+  /** requested occurrences before clamping to minOccurs and maxOccurs */
+  repeat: number;
+  /** optional elements are left out from this depth on */
+  maxDepth: number;
+  /** content nested deeper than this cannot be generated */
+  maxTotalDepth: number;
+}
+
+/** Chance that `optional: 'random'` includes an optional element or attribute. */
+const RANDOM_OPTIONAL_CHANCE = 0.5;
+
+/**
+ * How much an optional particle counts when `smallest` estimates a branch: its expected share of the output.
+ * `all` generates it, `none` leaves it out, `random` includes it with RANDOM_OPTIONAL_CHANCE. The weight for
+ * `random` is a product decision (2026-11-11); change it here and in docs/api.md only.
+ */
+export function optionalWeight(mode: OptionalMode): number {
+  if (mode === 'all') return 1;
+  if (mode === 'random') return RANDOM_OPTIONAL_CHANCE;
+  return 0;
 }
 
 /** Picks the branch of a choice, as an index into `branches`. */
@@ -147,6 +177,7 @@ export class Walker {
   private nodes = 0;
   private occurrences = 0;
   readonly choices: { id: string; branch: number; branches: number }[] = [];
+  private readonly settings: ChoiceSettings;
 
   constructor(
     private readonly set: SchemaSet,
@@ -154,6 +185,12 @@ export class Walker {
     private readonly options: WalkOptions,
   ) {
     this.facets = new FacetReader(set, problems);
+    this.settings = {
+      optionalElements: options.optionalElements ?? options.optional,
+      repeat: options.repeat,
+      maxDepth: options.maxDepth,
+      maxTotalDepth: options.maxTotalDepth ?? options.maxDepth + DEPTH_RESERVE,
+    };
   }
 
   /** The instance of a global element. */
@@ -531,7 +568,7 @@ export class Walker {
         ? (this.options.optionalAttributes ?? this.options.optional)
         : (this.options.optionalElements ?? this.options.optional);
     if (mode === 'none' || (kind === 'element' && depth >= this.options.maxDepth)) return false;
-    return mode === 'all' || this.options.rng.chance(0.5);
+    return mode === 'all' || this.options.rng.chance(RANDOM_OPTIONAL_CHANCE);
   }
 
   /** Requested multiplicity is independent of whether optional particles are included. */
@@ -591,7 +628,15 @@ export class Walker {
         const branches = xsChildren(node).filter((c) => occurs(c).max > 0);
         const enter = this.entering(node, max, place, branches, doc);
         for (let k = 0; k < times && branches.length > 0; k += 1) {
-          const index = this.options.choice({ node, branches, path, set: this.set, rng: this.options.rng });
+          const index = this.options.choice({
+            node,
+            branches,
+            path,
+            set: this.set,
+            rng: this.options.rng,
+            depth,
+            settings: this.settings,
+          });
           if (!Number.isInteger(index) || index < 0 || index >= branches.length) {
             throw new RangeError('choice strategy returned an invalid branch index');
           }
@@ -715,58 +760,123 @@ export function choiceId(set: SchemaSet, node: Element): string {
   return `${set.at(node).file ?? ''}#${parts.join('/')}`;
 }
 
-/** Fewest required descendant elements; recursive paths have infinite cost. */
-export const smallestBranch: ChoiceStrategy = ({ branches, set }) => {
-  const cache = new Map<Element, number>();
-  let cycles = 0;
-  const cost = (node: Element, seen: Set<Element>): number => {
-    if (seen.has(node)) {
-      cycles += 1;
-      return Infinity;
+/** Settings assumed by `smallest` when a caller builds a ChoiceContext without them: required content, once. */
+const REQUIRED_ONLY: ChoiceSettings = { optionalElements: 'none', repeat: 1, maxDepth: 12, maxTotalDepth: 64 };
+const PARTICLES = new Set(['element', 'sequence', 'choice', 'all', 'group', 'any']);
+const estimators = new WeakMap<SchemaSet, Map<string, (particle: Element, depth: number) => number>>();
+
+/**
+ * Expected number of elements one particle adds, as the walker generates it with these settings. Occurrences are
+ * `repeat` clamped to the particle's bounds. An optional particle counts with optionalWeight() and not at all from
+ * maxDepth on, so recursion through optional content ends as generation does. A nested choice counts with its
+ * smallest branch. Content deeper than maxTotalDepth, an unknown reference or a circular group or derivation make the
+ * cost infinite. `depth` is the depth of the element whose content holds the particle.
+ */
+export function expectedSize(set: SchemaSet, particle: Element, depth: number, settings = REQUIRED_ONLY): number {
+  const key = `${settings.optionalElements}|${settings.repeat}|${settings.maxDepth}|${settings.maxTotalDepth}`;
+  let bySettings = estimators.get(set);
+  if (!bySettings) {
+    bySettings = new Map();
+    estimators.set(set, bySettings);
+  }
+  let estimate = bySettings.get(key);
+  if (!estimate) {
+    estimate = estimator(set, settings);
+    bySettings.set(key, estimate);
+  }
+  return estimate(particle, depth);
+}
+
+function estimator(set: SchemaSet, settings: ChoiceSettings): (particle: Element, depth: number) => number {
+  const weight = optionalWeight(settings.optionalElements);
+  const memo = new Map<Element, Map<number, number>>();
+  // Groups and types being computed, by depth: meeting one again at the same depth is a cycle without an element.
+  const active = new Map<Element, Set<number>>();
+  const guarded = (node: Element, depth: number, compute: () => number): number => {
+    const busy = active.get(node) ?? new Set<number>();
+    if (busy.has(depth)) return Infinity;
+    busy.add(depth);
+    active.set(node, busy);
+    try {
+      return compute();
+    } finally {
+      busy.delete(depth);
     }
-    const cached = cache.get(node);
+  };
+  const sum = (nodes: Element[], depth: number): number =>
+    nodes.filter((n) => PARTICLES.has(n.localName ?? '')).reduce((total, n) => total + occurrence(n, depth), 0);
+  const occurrence = (node: Element, depth: number): number => {
+    const cached = memo.get(node)?.get(depth);
     if (cached !== undefined) return cached;
-    const before = cycles;
-    const result = compute(node, seen);
-    if (cycles === before) cache.set(node, result);
-    return result;
+    const { min, max } = occurs(node);
+    let value = 0;
+    const share = max === 0 ? 0 : min > 0 ? 1 : depth >= settings.maxDepth ? 0 : weight;
+    if (share > 0) value = share * Math.min(max, Math.max(min, settings.repeat)) * single(node, depth);
+    const byDepth = memo.get(node) ?? new Map<number, number>();
+    byDepth.set(depth, value);
+    memo.set(node, byDepth);
+    return value;
   };
-  const compute = (node: Element, seen: Set<Element>): number => {
-    const min = occurs(node).min;
-    if (min === 0) return 0;
-    const next = new Set([...seen, node]);
-    const kind = node.localName;
-    if (kind === 'element') {
-      const ref = attr(node, 'ref');
-      if (ref !== undefined) {
-        const target = set.lookup('element', set.resolveQName(node, ref));
-        return target ? min * cost(target.node, next) : Infinity;
+  const single = (node: Element, depth: number): number => {
+    switch (node.localName) {
+      case 'element': {
+        if (depth + 1 > settings.maxTotalDepth) return Infinity;
+        const ref = attr(node, 'ref');
+        const decl = ref === undefined ? node : set.lookup('element', set.resolveQName(node, ref))?.node;
+        return decl ? 1 + content(decl, depth + 1) : Infinity;
       }
-      const type = attr(node, 'type');
-      const complex = type
-        ? set.lookup('complexType', set.resolveQName(node, type))?.node
-        : xsChild(node, 'complexType');
-      return min * (1 + (complex ? cost(complex, next) : 0));
+      case 'sequence':
+      case 'all':
+        return sum(xsChildren(node), depth);
+      case 'choice': {
+        const branches = xsChildren(node).filter((c) => PARTICLES.has(c.localName ?? '') && occurs(c).max > 0);
+        return branches.length > 0 ? Math.min(...branches.map((b) => occurrence(b, depth))) : 0;
+      }
+      case 'group': {
+        const group = set.lookup('group', set.resolveQName(node, attr(node, 'ref') ?? ''));
+        return group ? guarded(group.node, depth, () => sum(xsChildren(group.node), depth)) : Infinity;
+      }
+      case 'any':
+        return 1;
+      default:
+        return 0;
     }
-    if (kind === 'group') {
-      const target = set.lookup('group', set.resolveQName(node, attr(node, 'ref') ?? ''));
-      return target ? min * xsChildren(target.node).reduce((sum, c) => sum + cost(c, next), 0) : Infinity;
-    }
-    const children = xsChildren(node).filter(
-      (c) => !['attribute', 'attributeGroup', 'simpleType'].includes(c.localName ?? ''),
-    );
-    if (kind === 'choice') return min * Math.min(...children.map((c) => cost(c, next)));
-    let base = 0;
-    if (kind === 'extension') {
-      const inherited = set.lookup('complexType', set.resolveQName(node, attr(node, 'base') ?? ''));
-      if (inherited) base = cost(inherited.node, next);
-    }
-    return min * (base + children.reduce((sum, c) => sum + cost(c, next), 0));
   };
+  const content = (decl: Element, depth: number): number => {
+    const typeName = attr(decl, 'type');
+    if (typeName !== undefined) {
+      const qname = set.resolveQName(decl, typeName);
+      const complex = qname.ns === XS ? undefined : set.lookup('complexType', qname);
+      return complex ? typeContent(complex.node, depth) : 0;
+    }
+    const anonymous = xsChild(decl, 'complexType');
+    return anonymous ? typeContent(anonymous, depth) : 0;
+  };
+  const typeContent = (type: Element, depth: number): number =>
+    guarded(type, depth, () => {
+      if (xsChild(type, 'simpleContent')) return 0;
+      const complexContent = xsChild(type, 'complexContent');
+      const derivation = complexContent ? xsChildren(complexContent)[0] : undefined;
+      let base = 0;
+      if (derivation?.localName === 'extension') {
+        const qname = set.resolveQName(derivation, attr(derivation, 'base') ?? '');
+        const inherited = qname.ns === XS ? undefined : set.lookup('complexType', qname);
+        if (inherited) base = typeContent(inherited.node, depth);
+      }
+      return base + sum(xsChildren(derivation ?? type), depth);
+    });
+  return occurrence;
+}
+
+/**
+ * The branch with the smallest expected output under the context's settings (see expectedSize); the first such
+ * branch on a tie. Without settings in the context, only required content counts.
+ */
+export const smallestBranch: ChoiceStrategy = ({ branches, set, depth = 0, settings }) => {
   let selected = 0;
   let best = Infinity;
   branches.forEach((branch, index) => {
-    const value = cost(branch, new Set());
+    const value = expectedSize(set, branch, depth, settings);
     if (value < best) {
       best = value;
       selected = index;
@@ -774,3 +884,63 @@ export const smallestBranch: ChoiceStrategy = ({ branches, set }) => {
   });
   return selected;
 };
+
+/**
+ * The choices a particle can lead to, through element types, derivations, groups and every branch of nested
+ * choices. Optional particles are followed only when `followOptional` is set. Depth limits are not applied.
+ */
+export function reachableChoices(set: SchemaSet, particle: Element, followOptional: boolean): Element[] {
+  const out: Element[] = [];
+  const seen = new Set<Element>();
+  const visitType = (type: Element): void => {
+    if (seen.has(type)) return;
+    seen.add(type);
+    const complexContent = xsChild(type, 'complexContent');
+    const derivation = complexContent ? xsChildren(complexContent)[0] : undefined;
+    if (derivation?.localName === 'extension') {
+      const qname = set.resolveQName(derivation, attr(derivation, 'base') ?? '');
+      const inherited = qname.ns === XS ? undefined : set.lookup('complexType', qname);
+      if (inherited) visitType(inherited.node);
+    }
+    for (const child of xsChildren(derivation ?? type)) visit(child);
+  };
+  const visit = (node: Element): void => {
+    if (seen.has(node) || !PARTICLES.has(node.localName ?? '')) return;
+    seen.add(node);
+    const { min, max } = occurs(node);
+    if (max === 0 || (min === 0 && !followOptional)) return;
+    switch (node.localName) {
+      case 'element': {
+        const ref = attr(node, 'ref');
+        const decl = ref === undefined ? node : set.lookup('element', set.resolveQName(node, ref))?.node;
+        const typeName = decl && attr(decl, 'type');
+        if (decl && typeName !== undefined) {
+          const qname = set.resolveQName(decl, typeName);
+          const complex = qname.ns === XS ? undefined : set.lookup('complexType', qname);
+          if (complex) visitType(complex.node);
+        } else if (decl) {
+          const anonymous = xsChild(decl, 'complexType');
+          if (anonymous) visitType(anonymous);
+        }
+        return;
+      }
+      case 'choice':
+        out.push(node);
+        for (const child of xsChildren(node)) visit(child);
+        return;
+      case 'sequence':
+      case 'all':
+        for (const child of xsChildren(node)) visit(child);
+        return;
+      case 'group': {
+        const group = set.lookup('group', set.resolveQName(node, attr(node, 'ref') ?? ''));
+        if (group) for (const child of xsChildren(group.node)) visit(child);
+        return;
+      }
+      default:
+        return;
+    }
+  };
+  visit(particle);
+  return out;
+}
