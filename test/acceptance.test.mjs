@@ -538,6 +538,23 @@ test('invalid attempts do not count as covered branches', async () => {
   assert.equal(batch.coverage.covered, 0);
   assert.equal(batch.coverage.complete, false);
 });
+test('a chameleon include takes the namespace of each document that includes it', async () => {
+  const xs = 'xmlns:xs="http://www.w3.org/2001/XMLSchema"';
+  const files = {
+    'main.xsd': `<xs:schema ${xs} xmlns="urn:m" xmlns:a="urn:a" targetNamespace="urn:m" elementFormDefault="qualified"><xs:import namespace="urn:a" schemaLocation="sub/a.xsd"/><xs:include schemaLocation="common/contact.xsd"/><xs:element name="R"><xs:complexType><xs:sequence><xs:element name="Own" type="Contact"/><xs:element name="Foreign" type="a:Contact"/><xs:element ref="a:Note"/></xs:sequence></xs:complexType></xs:element></xs:schema>`,
+    'sub/a.xsd': `<xs:schema ${xs} targetNamespace="urn:a"><xs:include schemaLocation="../common/contact.xsd"/></xs:schema>`,
+    'common/contact.xsd': `<xs:schema ${xs} elementFormDefault="qualified"><xs:include schemaLocation="values.xsd"/><xs:complexType name="Contact"><xs:sequence><xs:element name="Phone" type="Number"/></xs:sequence><xs:attribute name="kind" type="Number" use="required"/></xs:complexType><xs:element name="Note" type="xs:string"/></xs:schema>`,
+    'common/values.xsd': `<xs:schema ${xs}><xs:include schemaLocation="contact.xsd"/><xs:simpleType name="Number"><xs:restriction base="xs:string"><xs:pattern value="[0-9]{4}"/></xs:restriction></xs:simpleType></xs:schema>`,
+  };
+  const sample = await generateSample({ entry: 'main.xsd', files }, options);
+  okay(sample);
+  // Qualified local elements of the included type are in the namespace of the including document.
+  assert.match(sample.xml, /<Own kind="\d{4}">\s*<Phone>\d{4}<\/Phone>/);
+  assert.match(sample.xml, /<Foreign kind="\d{4}">\s*<a:Phone>\d{4}<\/a:Phone>/);
+  assert.match(sample.xml, /<a:Note>/);
+  const { roots } = listRoots({ entry: 'main.xsd', files });
+  assert.deepEqual(roots.map((r) => r.expandedName).sort(), ['{urn:a}Note', '{urn:m}Note', '{urn:m}R']);
+});
 test('optional recursion terminates without dropping required content', async () => {
   const body =
     '<xs:element name="Root" type="Node"/><xs:complexType name="Node"><xs:sequence><xs:element name="Code" type="xs:string"/><xs:element name="Child" type="Node" minOccurs="0"/></xs:sequence></xs:complexType>';

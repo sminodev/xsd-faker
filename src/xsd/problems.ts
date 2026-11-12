@@ -7,7 +7,6 @@ export const PROBLEM_CODES = [
   'missing-file',
   'not-a-schema',
   'unknown-prefix',
-  'unsupported-include',
   'unsupported-redefine',
   // choosing the root element
   'root-required',

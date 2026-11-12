@@ -79,21 +79,75 @@ describe('SchemaSet', () => {
     expect(problems[0]).toMatchObject({ file: 'a.xsd', line: 2, message: 'schema document gone.xsd not found' });
   });
 
-  it('reports an include into another target namespace and xs:redefine, which it does not apply', () => {
+  it('reports an include of another target namespace and xs:redefine, which it does not apply', () => {
     const { problems } = load(
       {
         'a.xsd': `<xs:schema ${XS} targetNamespace="urn:a">
-          <xs:include schemaLocation="plain.xsd"/>
-          <xs:redefine schemaLocation="plain.xsd"/>
+          <xs:include schemaLocation="other.xsd"/>
+          <xs:redefine schemaLocation="other.xsd"/>
         </xs:schema>`,
-        'plain.xsd': `<xs:schema ${XS}><xs:simpleType name="T"/></xs:schema>`,
+        'other.xsd': `<xs:schema ${XS} targetNamespace="urn:b"><xs:simpleType name="T"/></xs:schema>`,
       },
       'a.xsd',
     );
     expect(problems).toEqual([
-      expect.objectContaining({ code: 'unsupported-include', line: 2 }),
+      expect.objectContaining({ code: 'namespace-mismatch', line: 2 }),
       expect.objectContaining({ code: 'unsupported-redefine', line: 3 }),
     ]);
+  });
+
+  it('loads a chameleon include once per namespace it is included into', () => {
+    const { set, problems } = load(
+      {
+        'main.xsd': `<xs:schema ${XS} xmlns:a="urn:a" xmlns:b="urn:b" targetNamespace="urn:main">
+          <xs:import namespace="urn:a" schemaLocation="a/a.xsd"/>
+          <xs:import namespace="urn:b" schemaLocation="b.xsd"/>
+        </xs:schema>`,
+        'a/a.xsd': `<xs:schema ${XS} targetNamespace="urn:a"><xs:include schemaLocation="../common/c.xsd"/></xs:schema>`,
+        'b.xsd': `<xs:schema ${XS} targetNamespace="urn:b"><xs:include schemaLocation="common/c.xsd"/></xs:schema>`,
+        'common/c.xsd': `<xs:schema ${XS} elementFormDefault="qualified">
+          <xs:include schemaLocation="d.xsd"/>
+          <xs:complexType name="C"><xs:sequence><xs:element name="v" type="D"/></xs:sequence></xs:complexType>
+          <xs:element name="E" type="C"/>
+        </xs:schema>`,
+        'common/d.xsd': `<xs:schema ${XS}><xs:include schemaLocation="c.xsd"/><xs:simpleType name="D"><xs:restriction base="xs:string"/></xs:simpleType></xs:schema>`,
+      },
+      'main.xsd',
+    );
+    expect(problems).toEqual([]);
+    for (const ns of ['urn:a', 'urn:b']) {
+      const c = set.components.complexType.get(`{${ns}}C`);
+      expect(c?.doc.targetNamespace).toBe(ns);
+      expect(c?.doc.chameleon).toBe(true);
+      const v = xsChild(xsChild(c!.node, 'sequence')!, 'element')!;
+      // A name without namespace in the copy means the namespace it was included into, also through d.xsd.
+      expect(set.resolveQName(v, 'D')).toEqual({ ns, local: 'D' });
+      expect(set.components.simpleType.has(`{${ns}}D`)).toBe(true);
+      expect(set.resolveQName(v, 'xs:string').ns).toBe('http://www.w3.org/2001/XMLSchema');
+    }
+    // Each copy has its own nodes, and nothing is declared without namespace.
+    expect(set.components.complexType.get('{urn:a}C')?.node).not.toBe(set.components.complexType.get('{urn:b}C')?.node);
+    expect([...set.components.element.keys()].sort()).toEqual(['{urn:a}E', '{urn:b}E']);
+    expect([...set.sourceTexts.keys()].sort()).toEqual([
+      'a/a.xsd',
+      'b.xsd',
+      'common/c.xsd',
+      'common/d.xsd',
+      'main.xsd',
+    ]);
+    expect(set.pathOf(set.components.complexType.get('{urn:b}C')!.node)).toBe('common/c.xsd');
+  });
+
+  it('keeps a document without namespace as it is where it is not included into a namespace', () => {
+    const { set, problems } = load(
+      {
+        'main.xsd': `<xs:schema ${XS} targetNamespace="urn:a"><xs:include schemaLocation="c.xsd"/><xs:import schemaLocation="c.xsd"/></xs:schema>`,
+        'c.xsd': `<xs:schema ${XS}><xs:simpleType name="T"><xs:restriction base="xs:string"/></xs:simpleType></xs:schema>`,
+      },
+      'main.xsd',
+    );
+    expect(problems).toEqual([]);
+    expect([...set.components.simpleType.keys()].sort()).toEqual(['{urn:a}T', '{}T']);
   });
 
   it('resolves QNames with the namespaces in scope, including the default namespace', () => {

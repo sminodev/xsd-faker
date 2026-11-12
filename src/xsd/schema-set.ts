@@ -120,30 +120,48 @@ export function normalizePath(path: string): string {
 }
 
 export class SchemaDocument {
+  /** The namespace of its components: its own, or for a chameleon include that of the including document. */
   readonly targetNamespace: string;
   readonly elementQualified: boolean;
   readonly attributeQualified: boolean;
+  /** A document without targetNamespace included into a namespace; names without namespace in it mean that one. */
+  readonly chameleon: boolean;
 
   constructor(
     readonly path: string,
     readonly root: Element,
+    into?: string,
   ) {
-    this.targetNamespace = attr(root, 'targetNamespace') ?? '';
+    const own = attr(root, 'targetNamespace') ?? '';
+    this.chameleon = own === '' && into !== undefined && into !== '';
+    this.targetNamespace = this.chameleon ? (into ?? '') : own;
     this.elementQualified = attr(root, 'elementFormDefault') === 'qualified';
     this.attributeQualified = attr(root, 'attributeFormDefault') === 'qualified';
   }
 }
 
+/** The key of a chameleon copy of a document in `SchemaSet.documents`. */
+function chameleonKey(path: string, namespace: string): string {
+  return `${path} ${clark(namespace, '')}`;
+}
+
 /**
  * The schema documents reachable from an entry document through xs:import and xs:include, with their global
- * components by expanded name.
+ * components by expanded name. A document without targetNamespace that a namespaced document includes (a chameleon
+ * include) is loaded once per namespace it is included into, each time as its own copy: its components take that
+ * namespace, and so do the names in it that would otherwise have none.
  */
 export class SchemaSet {
   /** Exact texts parsed for this run; validation must use the same bytes. */
   readonly sourceTexts = new Map<string, string>();
   private loadedBytes = 0;
-  /** null while a document is being loaded or if it could not be loaded */
+  /**
+   * By path, and by path and namespace for chameleon copies; null while a document is being loaded or if it could
+   * not be loaded.
+   */
   readonly documents = new Map<string, SchemaDocument | null>();
+  /** the targetNamespace each loaded file declares itself */
+  private readonly ownNamespace = new Map<string, string>();
   /** the document of each loaded root element, to find the file of a node */
   private readonly byRoot = new Map<Element, SchemaDocument>();
   readonly components: Record<ComponentKind, Map<string, Component>> = {
@@ -164,40 +182,27 @@ export class SchemaSet {
       typeof source === 'function' ? source : (path) => (Object.hasOwn(source, path) ? source[path] : undefined);
   }
 
-  /** Loads a document and everything it imports or includes. */
-  load(path: string, from?: At): SchemaDocument | undefined {
+  /**
+   * Loads a document and everything it imports or includes.
+   *
+   * @param into - the target namespace of the document that includes this one
+   */
+  load(path: string, from?: At, into?: string): SchemaDocument | undefined {
     path = normalizePath(path);
-    if (this.documents.has(path)) {
-      return this.documents.get(path) ?? undefined;
+    let key = this.ownNamespace.get(path) === '' && into ? chameleonKey(path, into) : path;
+    if (this.documents.has(key)) {
+      return this.documents.get(key) ?? undefined;
     }
     if (this.documents.size >= 128) {
       this.problems.error('resource-limit', 'schema set exceeds 128 documents', from);
       return undefined;
     }
-    this.documents.set(path, null);
+    this.documents.set(key, null);
     const at = { ...from, file: from?.file ?? path };
-    let text: string | undefined;
-    try {
-      text = this.read(path);
-    } catch (e) {
-      this.problems.error('missing-file', `schema document ${path} could not be read: ${messageOf(e)}`, at);
+    const text = this.text(path, at);
+    if (text === undefined) {
       return undefined;
     }
-    if (text === undefined || text === null) {
-      this.problems.error('missing-file', `schema document ${path} not found`, at);
-      return undefined;
-    }
-    const bytes = new TextEncoder().encode(text).length;
-    this.loadedBytes += bytes;
-    if (bytes > 2 * 1024 * 1024 || this.loadedBytes > 16 * 1024 * 1024) {
-      this.problems.error('resource-limit', 'schema input exceeds the 2 MiB file or 16 MiB set limit', { file: path });
-      return undefined;
-    }
-    if (/<!DOCTYPE\b/i.test(text)) {
-      this.problems.error('unsafe-input', 'DOCTYPE declarations are not accepted in schema input', { file: path });
-      return undefined;
-    }
-    this.sourceTexts.set(path, text);
     let root: Element | null;
     try {
       const xml = new DOMParser({
@@ -206,7 +211,7 @@ export class SchemaSet {
             throw new Error(message);
           }
         },
-      }).parseFromString(String(text).replace(/^[\uFEFF\s]+/, ''), 'text/xml');
+      }).parseFromString(text.replace(/^[\uFEFF\s]+/, ''), 'text/xml');
       root = xml.documentElement;
     } catch (e) {
       this.problems.error('invalid-xml', `${path}: ${messageOf(e)}`, { file: path });
@@ -216,8 +221,14 @@ export class SchemaSet {
       this.problems.error('not-a-schema', `${path} is not an XML Schema document`, { file: path });
       return undefined;
     }
-    const doc = new SchemaDocument(path, root);
-    this.documents.set(path, doc);
+    const doc = new SchemaDocument(path, root, into);
+    this.ownNamespace.set(path, attr(root, 'targetNamespace') ?? '');
+    if (doc.chameleon && key === path) {
+      // Only now is it known that this include is a chameleon one; its copy has its own key.
+      this.documents.delete(path);
+      key = chameleonKey(path, doc.targetNamespace);
+    }
+    this.documents.set(key, doc);
     this.byRoot.set(root, doc);
     for (const child of xsChildren(root)) {
       const at = { file: path, node: child };
@@ -244,14 +255,15 @@ export class SchemaSet {
           }
           continue;
         }
-        const target = this.load(resolvePath(path, location), at);
-        if (target && child.localName === 'import' && (attr(child, 'namespace') ?? '') !== target.targetNamespace) {
+        const include = child.localName === 'include';
+        const target = this.load(resolvePath(path, location), at, include ? doc.targetNamespace : undefined);
+        if (target && !include && (attr(child, 'namespace') ?? '') !== target.targetNamespace) {
           this.problems.error('namespace-mismatch', `import namespace does not match ${target.path}`, at);
         }
-        if (target && child.localName === 'include' && target.targetNamespace !== doc.targetNamespace) {
+        if (target && include && target.targetNamespace !== doc.targetNamespace) {
           this.problems.error(
-            'unsupported-include',
-            `${target.path} is included into another target namespace (chameleon include)`,
+            'namespace-mismatch',
+            `${target.path} has the target namespace "${target.targetNamespace}" and cannot be included into "${doc.targetNamespace}"`,
             at,
           );
         }
@@ -260,6 +272,38 @@ export class SchemaSet {
       }
     }
     return doc;
+  }
+
+  /** The text of a schema file, read and checked once; undefined after a reported problem. */
+  private text(path: string, at: At): string | undefined {
+    const known = this.sourceTexts.get(path);
+    if (known !== undefined) {
+      return known;
+    }
+    let text: string | undefined;
+    try {
+      text = this.read(path);
+    } catch (e) {
+      this.problems.error('missing-file', `schema document ${path} could not be read: ${messageOf(e)}`, at);
+      return undefined;
+    }
+    if (text === undefined || text === null) {
+      this.problems.error('missing-file', `schema document ${path} not found`, at);
+      return undefined;
+    }
+    text = String(text);
+    const bytes = new TextEncoder().encode(text).length;
+    this.loadedBytes += bytes;
+    if (bytes > 2 * 1024 * 1024 || this.loadedBytes > 16 * 1024 * 1024) {
+      this.problems.error('resource-limit', 'schema input exceeds the 2 MiB file or 16 MiB set limit', { file: path });
+      return undefined;
+    }
+    if (/<!DOCTYPE\b/i.test(text)) {
+      this.problems.error('unsafe-input', 'DOCTYPE declarations are not accepted in schema input', { file: path });
+      return undefined;
+    }
+    this.sourceTexts.set(path, text);
+    return text;
   }
 
   /** Resolves a QName written in an attribute value against the namespaces in scope of `node`. */
@@ -275,8 +319,11 @@ export class SchemaSet {
       prefix === null ? node.lookupNamespaceURI('') || node.lookupNamespaceURI(null) : node.lookupNamespaceURI(prefix);
     if (prefix !== null && !ns) {
       this.problems.error('unknown-prefix', `prefix ${prefix} of ${qname} is not declared`, this.at(node));
+      return { ns: '', local };
     }
-    return { ns: ns || '', local };
+    // In a chameleon include, a name without namespace refers to the namespace the document was included into.
+    const doc = ns ? undefined : this.documentOf(node);
+    return { ns: ns || (doc?.chameleon ? doc.targetNamespace : ''), local };
   }
 
   lookup(kind: ComponentKind, name: QName): Component | undefined {
@@ -290,7 +337,12 @@ export class SchemaSet {
 
   /** The path of the document a node belongs to. */
   pathOf(node: Node): string | undefined {
+    return this.documentOf(node)?.path;
+  }
+
+  /** The loaded document a node belongs to; each chameleon copy has its own nodes. */
+  documentOf(node: Node): SchemaDocument | undefined {
     const root = node.ownerDocument?.documentElement;
-    return root ? this.byRoot.get(root)?.path : undefined;
+    return root ? this.byRoot.get(root) : undefined;
   }
 }
