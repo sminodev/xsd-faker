@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { Buffer } from 'node:buffer';
 import { test } from 'node:test';
 import { performance } from 'node:perf_hooks';
 import { mkdtempSync, readFileSync, writeFileSync, mkdirSync, rmSync, readdirSync, symlinkSync } from 'node:fs';
@@ -996,14 +997,159 @@ test('schema source is read once, then snapshotted for validation', async () => 
   okay(sample);
   assert.equal(reads, 1);
 });
-test('DOCTYPE is rejected before parsing', async () => {
-  await assert.rejects(
-    generateSample(
-      { entry: 'a.xsd', files: { 'a.xsd': '<!DOCTYPE schema [<!ENTITY demo "x">]>' + simple.files['a.xsd'] } },
-      options,
-    ),
-    /DOCTYPE/,
-  );
+/** The DOCTYPE cases of the profile. */
+const DOCTYPE_CASES = {
+  'rejected-attlist-different-value':
+    '<?xml version="1.0" encoding="utf-8"?>\n<!DOCTYPE schema [\n  <!ATTLIST schema xmlns:ds CDATA #FIXED "urn:other">\n]>\n<schema xmlns="http://www.w3.org/2001/XMLSchema" xmlns:ds="urn:test:ds" targetNamespace="urn:test:ds" elementFormDefault="qualified">\n  <element name="Sig" type="string"/>\n</schema>\n',
+  'rejected-attlist-fixed-without-space':
+    '<?xml version="1.0" encoding="utf-8"?>\n<!DOCTYPE schema [ <!ATTLIST schema xmlns:ds CDATA#FIXED "urn:test:ds"> ]>\n<schema xmlns="http://www.w3.org/2001/XMLSchema" xmlns:ds="urn:test:ds" targetNamespace="urn:test:ds" elementFormDefault="qualified">\n  <element name="Sig" type="string"/>\n</schema>\n',
+  'rejected-attlist-equal-only-by-character-reference':
+    '<?xml version="1.0" encoding="utf-8"?>\n<!DOCTYPE schema [ <!ATTLIST schema xmlns:ds CDATA "urn:test:ds"> ]>\n<schema xmlns="http://www.w3.org/2001/XMLSchema" xmlns:ds="urn:test:&#100;s" targetNamespace="urn:test:ds" elementFormDefault="qualified">\n  <element name="Sig" type="string"/>\n</schema>\n',
+  'rejected-attlist-not-stated-on-root':
+    '<?xml version="1.0" encoding="utf-8"?>\n<!DOCTYPE schema [\n  <!ATTLIST schema xmlns:ds CDATA #FIXED "urn:test:ds">\n]>\n<schema xmlns="http://www.w3.org/2001/XMLSchema"  targetNamespace="urn:test:ds" elementFormDefault="qualified">\n  <element name="Sig" type="string"/>\n</schema>\n',
+  'rejected-doctype-after-root':
+    '<?xml version="1.0" encoding="utf-8"?>\n<schema xmlns="http://www.w3.org/2001/XMLSchema" xmlns:ds="urn:test:ds" targetNamespace="urn:test:ds" elementFormDefault="qualified">\n  <element name="Sig" type="string"/>\n</schema>\n<!DOCTYPE schema>\n',
+  'rejected-element-declaration':
+    '<?xml version="1.0" encoding="utf-8"?>\n<!DOCTYPE schema [\n  <!ELEMENT schema ANY>\n]>\n<schema xmlns="http://www.w3.org/2001/XMLSchema" xmlns:ds="urn:test:ds" targetNamespace="urn:test:ds" elementFormDefault="qualified">\n  <element name="Sig" type="string"/>\n</schema>\n',
+  'rejected-entity-long-name':
+    '<?xml version="1.0" encoding="utf-8"?>\n<!DOCTYPE schema [ <!ENTITY eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee "INJECTED"> ]>\n<schema xmlns="http://www.w3.org/2001/XMLSchema" xmlns:ds="urn:test:ds" targetNamespace="urn:test:ds" elementFormDefault="qualified">\n  <element name="Sig" type="string" fixed="&eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee;"/>\n</schema>\n',
+  'rejected-entity-name-with-nbsp':
+    '<?xml version="1.0" encoding="utf-8"?>\n<!DOCTYPE schema [ <!ENTITY un\u00a0used "x"> ]>\n<schema xmlns="http://www.w3.org/2001/XMLSchema" xmlns:ds="urn:test:ds" targetNamespace="urn:test:ds" elementFormDefault="qualified">\n  <element name="Sig" type="string"/>\n</schema>\n',
+  'rejected-entity-name-with-semicolon':
+    '<?xml version="1.0" encoding="utf-8"?>\n<!DOCTYPE schema [ <!ENTITY un;used "x"> ]>\n<schema xmlns="http://www.w3.org/2001/XMLSchema" xmlns:ds="urn:test:ds" targetNamespace="urn:test:ds" elementFormDefault="qualified">\n  <element name="Sig" type="string"/>\n</schema>\n',
+  'rejected-entity-not-literal':
+    '<?xml version="1.0" encoding="utf-8"?>\n<!DOCTYPE schema [\n  <!ENTITY a \'&#x26;b;\'>\n]>\n<schema xmlns="http://www.w3.org/2001/XMLSchema" xmlns:ds="urn:test:ds" targetNamespace="urn:test:ds" elementFormDefault="qualified">\n  <element name="Sig" type="string"/>\n</schema>\n',
+  'rejected-entity-without-space':
+    '<?xml version="1.0" encoding="utf-8"?>\n<!DOCTYPE schema [ <!ENTITY unused"x"> ]>\n<schema xmlns="http://www.w3.org/2001/XMLSchema" xmlns:ds="urn:test:ds" targetNamespace="urn:test:ds" elementFormDefault="qualified">\n  <element name="Sig" type="string"/>\n</schema>\n',
+  'rejected-entity-used':
+    '<?xml version="1.0" encoding="utf-8"?>\n<!DOCTYPE schema [\n  <!ENTITY dsig \'urn:test:ds\'>\n]>\n<schema xmlns="http://www.w3.org/2001/XMLSchema" xmlns:ds="&dsig;" targetNamespace="urn:test:ds" elementFormDefault="qualified">\n  <element name="Sig" type="string"/>\n</schema>\n',
+  'rejected-entity-value-with-markup':
+    '<?xml version="1.0" encoding="utf-8"?>\n<!DOCTYPE schema [ <!ENTITY unused "<a/>"> ]>\n<schema xmlns="http://www.w3.org/2001/XMLSchema" xmlns:ds="urn:test:ds" targetNamespace="urn:test:ds" elementFormDefault="qualified">\n  <element name="Sig" type="string"/>\n</schema>\n',
+  'rejected-external-entity':
+    '<?xml version="1.0" encoding="utf-8"?>\n<!DOCTYPE schema [\n  <!ENTITY ext SYSTEM "file:///etc/hosts">\n]>\n<schema xmlns="http://www.w3.org/2001/XMLSchema" xmlns:ds="urn:test:ds" targetNamespace="urn:test:ds" elementFormDefault="qualified">\n  <element name="Sig" type="string"/>\n</schema>\n',
+  'rejected-comment-with-pi-start':
+    '<?xml version="1.0" encoding="utf-8"?>\n<!---> <? -->\n<!DOCTYPE schema [ <!ENTITY e "INJECTED"> ]>\n<!-- ?> -->\n<schema xmlns="http://www.w3.org/2001/XMLSchema" xmlns:ds="urn:test:ds" targetNamespace="urn:test:ds" elementFormDefault="qualified">\n  <element name="Sig" type="string" fixed="&e;"/>\n</schema>\n',
+  'rejected-comment-unterminated-in-subset':
+    '<?xml version="1.0" encoding="utf-8"?>\n<!DOCTYPE schema [ <!---> ]>\n<schema xmlns="http://www.w3.org/2001/XMLSchema" xmlns:ds="urn:test:ds" targetNamespace="urn:test:ds" elementFormDefault="qualified">\n  <element name="Sig" type="string"/>\n</schema>\n',
+  'rejected-pe-reference':
+    '<?xml version="1.0" encoding="utf-8"?>\n<!DOCTYPE schema [\n  <!ENTITY % p \'\'>\n  %p;\n]>\n<schema xmlns="http://www.w3.org/2001/XMLSchema" xmlns:ds="urn:test:ds" targetNamespace="urn:test:ds" elementFormDefault="qualified">\n  <element name="Sig" type="string"/>\n</schema>\n',
+  'rejected-predefined-entity-redeclared':
+    '<?xml version="1.0" encoding="utf-8"?>\n<!DOCTYPE schema [ <!ENTITY amp "WRONG"> ]>\n<schema xmlns="http://www.w3.org/2001/XMLSchema" xmlns:ds="urn:test:ds" targetNamespace="urn:test:ds" elementFormDefault="qualified">\n  <element name="Sig" type="string"/>\n</schema>\n',
+  'allowed-doctype-only-in-comment':
+    '<?xml version="1.0" encoding="utf-8"?>\n<!-- The original declaration was removed:\n<!DOCTYPE schema PUBLIC "-//W3C//DTD XMLSchema 200102//EN" "http://www.w3.org/2001/XMLSchema.dtd" [ <!ENTITY dsig \'urn:test:ds\'> ]>\n-->\n<schema xmlns="http://www.w3.org/2001/XMLSchema" xmlns:ds="urn:test:ds" targetNamespace="urn:test:ds" elementFormDefault="qualified">\n  <element name="Sig" type="string"/>\n</schema>\n',
+  'allowed-entity-only-in-comment':
+    '<?xml version="1.0" encoding="utf-8"?>\n<!DOCTYPE schema [ <!ENTITY unused "text"> ]>\n<!-- &unused; is only in a comment and is no reference -->\n<schema xmlns="http://www.w3.org/2001/XMLSchema" xmlns:ds="urn:test:ds" targetNamespace="urn:test:ds" elementFormDefault="qualified">\n  <element name="Sig" type="string"/>\n</schema>\n',
+  'allowed-entity-only-in-cdata':
+    '<?xml version="1.0" encoding="utf-8"?>\n<!DOCTYPE schema [ <!ENTITY unused "text"> ]>\n<schema xmlns="http://www.w3.org/2001/XMLSchema" xmlns:ds="urn:test:ds" targetNamespace="urn:test:ds" elementFormDefault="qualified">\n  <annotation><documentation><![CDATA[&unused; is text here]]></documentation></annotation>\n  <element name="Sig" type="string"/>\n</schema>\n',
+  'allowed-comment-starts-with-hyphen':
+    '<?xml version="1.0" encoding="utf-8"?>\n<!---> <!DOCTYPE schema SYSTEM "http://example.invalid/x.dtd"> -->\n<schema xmlns="http://www.w3.org/2001/XMLSchema" xmlns:ds="urn:test:ds" targetNamespace="urn:test:ds" elementFormDefault="qualified">\n  <element name="Sig" type="string"/>\n</schema>\n',
+  'allowed-inert-doctype':
+    '<?xml version="1.0" encoding="utf-8"?>\n<!DOCTYPE schema\n  PUBLIC "-//W3C//DTD XMLSchema 200102//EN" "http://www.w3.org/2001/XMLSchema.dtd"\n [\n   <!ATTLIST schema\n     xmlns:ds CDATA #FIXED "urn:test:ds">\n   <!ENTITY dsig \'urn:test:ds\'>\n   <!ENTITY % p \'\'>\n   <!ENTITY % s \'\'>\n   <!-- a comment in the subset -->\n  ]>\n<schema xmlns="http://www.w3.org/2001/XMLSchema" xmlns:ds="urn:test:ds" targetNamespace="urn:test:ds" elementFormDefault="qualified">\n  <element name="Sig" type="string"/>\n</schema>\n',
+  'malformed-double-bom':
+    '\ufeff\ufeff<?xml version="1.0" encoding="utf-8"?>\n<schema xmlns="http://www.w3.org/2001/XMLSchema" xmlns:ds="urn:test:ds" targetNamespace="urn:test:ds" elementFormDefault="qualified">\n  <element name="Sig" type="string"/>\n</schema>\n',
+  'malformed-space-before-xml-declaration':
+    ' <?xml version="1.0" encoding="utf-8"?>\n<schema xmlns="http://www.w3.org/2001/XMLSchema" xmlns:ds="urn:test:ds" targetNamespace="urn:test:ds" elementFormDefault="qualified">\n  <element name="Sig" type="string"/>\n</schema>\n',
+};
+test('a DOCTYPE of the inert profile is neutralized for parser and validator; every other form is refused', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'xsd-doctype-'));
+  try {
+    for (const [name, text] of Object.entries(DOCTYPE_CASES)) {
+      const file = join(dir, `${name}.xsd`);
+      writeFileSync(file, text);
+      if (name.startsWith('rejected-') || name.startsWith('malformed-')) {
+        const code = name.startsWith('rejected-') ? 'unsafe-input' : 'invalid-xml';
+        await assert.rejects(
+          generateSampleFile(file, options),
+          (error) => error.problems.some((p) => p.code === code),
+          name,
+        );
+        continue;
+      }
+      const sample = await generateSampleFile(file, options);
+      okay(sample);
+      const notes = sample.problems.filter((p) => p.code === 'neutralized-doctype');
+      assert.deepEqual(
+        notes.map((p) => p.severity),
+        ['allowed-doctype-only-in-comment', 'allowed-comment-starts-with-hyphen'].includes(name) ? [] : ['warning'],
+        name,
+      );
+    }
+    // An unused literal entity alone is inert; using it is not.
+    const inert = '<!DOCTYPE xs:schema [<!ENTITY demo "x">]>' + simple.files['a.xsd'];
+    okay(await generateSample({ entry: 'a.xsd', files: { 'a.xsd': inert } }, options));
+    await assert.rejects(
+      generateSample(
+        {
+          entry: 'a.xsd',
+          files: { 'a.xsd': inert.replace('name="Count"', 'name="Count" id="&demo;"') },
+        },
+        options,
+      ),
+      /entity &demo;/,
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+/** The encoding cases, as bytes. */
+const ENCODING_CASES = {
+  'latin1-c1-range':
+    'PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0iSVNPLTg4NTktMSI/Pgo8eHM6c2NoZW1hIHhtbG5zOnhzPSJodHRwOi8vd3d3LnczLm9yZy8yMDAxL1hNTFNjaGVtYSI+PHhzOmVsZW1lbnQgbmFtZT0iTmFtZSI+PHhzOnNpbXBsZVR5cGU+PHhzOnJlc3RyaWN0aW9uIGJhc2U9InhzOnN0cmluZyI+PHhzOmVudW1lcmF0aW9uIHZhbHVlPSJNgGxsZXIiLz48L3hzOnJlc3RyaWN0aW9uPjwveHM6c2ltcGxlVHlwZT48L3hzOmVsZW1lbnQ+PC94czpzY2hlbWE+Cg==',
+  latin1:
+    'PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0iSVNPLTg4NTktMSI/Pgo8eHM6c2NoZW1hIHhtbG5zOnhzPSJodHRwOi8vd3d3LnczLm9yZy8yMDAxL1hNTFNjaGVtYSI+PHhzOmVsZW1lbnQgbmFtZT0iTmFtZSI+PHhzOnNpbXBsZVR5cGU+PHhzOnJlc3RyaWN0aW9uIGJhc2U9InhzOnN0cmluZyI+PHhzOmVudW1lcmF0aW9uIHZhbHVlPSJN/GxsZXIiLz48L3hzOnJlc3RyaWN0aW9uPjwveHM6c2ltcGxlVHlwZT48L3hzOmVsZW1lbnQ+PC94czpzY2hlbWE+Cg==',
+  'unsupported-shift-jis':
+    'PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0iU2hpZnRfSklTIj8+Cjx4czpzY2hlbWEgeG1sbnM6eHM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDEvWE1MU2NoZW1hIj48eHM6ZWxlbWVudCBuYW1lPSJOYW1lIj48eHM6c2ltcGxlVHlwZT48eHM6cmVzdHJpY3Rpb24gYmFzZT0ieHM6c3RyaW5nIj48eHM6ZW51bWVyYXRpb24gdmFsdWU9Ik11ZWxsZXIiLz48L3hzOnJlc3RyaWN0aW9uPjwveHM6c2ltcGxlVHlwZT48L3hzOmVsZW1lbnQ+PC94czpzY2hlbWE+Cg==',
+  'malformed-ascii-with-umlaut':
+    'PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0iVVMtQVNDSUkiPz4KPHhzOnNjaGVtYSB4bWxuczp4cz0iaHR0cDovL3d3dy53My5vcmcvMjAwMS9YTUxTY2hlbWEiPjx4czplbGVtZW50IG5hbWU9Ik5hbWUiPjx4czpzaW1wbGVUeXBlPjx4czpyZXN0cmljdGlvbiBiYXNlPSJ4czpzdHJpbmciPjx4czplbnVtZXJhdGlvbiB2YWx1ZT0iTfxsbGVyIi8+PC94czpyZXN0cmljdGlvbj48L3hzOnNpbXBsZVR5cGU+PC94czplbGVtZW50PjwveHM6c2NoZW1hPgo=',
+  'malformed-bom-contradicts-declaration':
+    '77u/PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0iSVNPLTg4NTktMSI/Pgo8eHM6c2NoZW1hIHhtbG5zOnhzPSJodHRwOi8vd3d3LnczLm9yZy8yMDAxL1hNTFNjaGVtYSI+PHhzOmVsZW1lbnQgbmFtZT0iTmFtZSI+PHhzOnNpbXBsZVR5cGU+PHhzOnJlc3RyaWN0aW9uIGJhc2U9InhzOnN0cmluZyI+PHhzOmVudW1lcmF0aW9uIHZhbHVlPSJNw7xsbGVyIi8+PC94czpyZXN0cmljdGlvbj48L3hzOnNpbXBsZVR5cGU+PC94czplbGVtZW50PjwveHM6c2NoZW1hPgo=',
+  'malformed-utf8-bytes':
+    'PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0iVVRGLTgiPz4KPHhzOnNjaGVtYSB4bWxuczp4cz0iaHR0cDovL3d3dy53My5vcmcvMjAwMS9YTUxTY2hlbWEiPjx4czplbGVtZW50IG5hbWU9Ik5hbWUiPjx4czpzaW1wbGVUeXBlPjx4czpyZXN0cmljdGlvbiBiYXNlPSJ4czpzdHJpbmciPjx4czplbnVtZXJhdGlvbiB2YWx1ZT0iTfxsbGVyIi8+PC94czpyZXN0cmljdGlvbj48L3hzOnNpbXBsZVR5cGU+PC94czplbGVtZW50PjwveHM6c2NoZW1hPgo=',
+  'utf16-bom':
+    '//48AD8AeABtAGwAIAB2AGUAcgBzAGkAbwBuAD0AIgAxAC4AMAAiACAAZQBuAGMAbwBkAGkAbgBnAD0AIgBVAFQARgAtADEANgAiAD8APgAKADwAeABzADoAcwBjAGgAZQBtAGEAIAB4AG0AbABuAHMAOgB4AHMAPQAiAGgAdAB0AHAAOgAvAC8AdwB3AHcALgB3ADMALgBvAHIAZwAvADIAMAAwADEALwBYAE0ATABTAGMAaABlAG0AYQAiAD4APAB4AHMAOgBlAGwAZQBtAGUAbgB0ACAAbgBhAG0AZQA9ACIATgBhAG0AZQAiAD4APAB4AHMAOgBzAGkAbQBwAGwAZQBUAHkAcABlAD4APAB4AHMAOgByAGUAcwB0AHIAaQBjAHQAaQBvAG4AIABiAGEAcwBlAD0AIgB4AHMAOgBzAHQAcgBpAG4AZwAiAD4APAB4AHMAOgBlAG4AdQBtAGUAcgBhAHQAaQBvAG4AIAB2AGEAbAB1AGUAPQAiAE0A/ABsAGwAZQByACIALwA+ADwALwB4AHMAOgByAGUAcwB0AHIAaQBjAHQAaQBvAG4APgA8AC8AeABzADoAcwBpAG0AcABsAGUAVAB5AHAAZQA+ADwALwB4AHMAOgBlAGwAZQBtAGUAbgB0AD4APAAvAHgAcwA6AHMAYwBoAGUAbQBhAD4ACgA=',
+  'utf16be-bom':
+    '/v8APAA/AHgAbQBsACAAdgBlAHIAcwBpAG8AbgA9ACIAMQAuADAAIgAgAGUAbgBjAG8AZABpAG4AZwA9ACIAVQBUAEYALQAxADYAIgA/AD4ACgA8AHgAcwA6AHMAYwBoAGUAbQBhACAAeABtAGwAbgBzADoAeABzAD0AIgBoAHQAdABwADoALwAvAHcAdwB3AC4AdwAzAC4AbwByAGcALwAyADAAMAAxAC8AWABNAEwAUwBjAGgAZQBtAGEAIgA+ADwAeABzADoAZQBsAGUAbQBlAG4AdAAgAG4AYQBtAGUAPQAiAE4AYQBtAGUAIgA+ADwAeABzADoAcwBpAG0AcABsAGUAVAB5AHAAZQA+ADwAeABzADoAcgBlAHMAdAByAGkAYwB0AGkAbwBuACAAYgBhAHMAZQA9ACIAeABzADoAcwB0AHIAaQBuAGcAIgA+ADwAeABzADoAZQBuAHUAbQBlAHIAYQB0AGkAbwBuACAAdgBhAGwAdQBlAD0AIgBNAPwAbABsAGUAcgAiAC8APgA8AC8AeABzADoAcgBlAHMAdAByAGkAYwB0AGkAbwBuAD4APAAvAHgAcwA6AHMAaQBtAHAAbABlAFQAeQBwAGUAPgA8AC8AeABzADoAZQBsAGUAbQBlAG4AdAA+ADwALwB4AHMAOgBzAGMAaABlAG0AYQA+AAo=',
+  'utf8-without-declaration':
+    'PHhzOnNjaGVtYSB4bWxuczp4cz0iaHR0cDovL3d3dy53My5vcmcvMjAwMS9YTUxTY2hlbWEiPjx4czplbGVtZW50IG5hbWU9Ik5hbWUiPjx4czpzaW1wbGVUeXBlPjx4czpyZXN0cmljdGlvbiBiYXNlPSJ4czpzdHJpbmciPjx4czplbnVtZXJhdGlvbiB2YWx1ZT0iTcO8bGxlciIvPjwveHM6cmVzdHJpY3Rpb24+PC94czpzaW1wbGVUeXBlPjwveHM6ZWxlbWVudD48L3hzOnNjaGVtYT4K',
+};
+test('schema files are decoded by byte order mark and declaration, strictly, and libxml2 reads the same text', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'xsd-encoding-'));
+  const expected = {
+    latin1: 'M\u00fcller',
+    'latin1-c1-range': 'M\u0080ller',
+    'utf16-bom': 'M\u00fcller',
+    'utf16be-bom': 'M\u00fcller',
+    'utf8-without-declaration': 'M\u00fcller',
+  };
+  try {
+    for (const [name, base64] of Object.entries(ENCODING_CASES)) {
+      const file = join(dir, `${name}.xsd`);
+      writeFileSync(file, Buffer.from(base64, 'base64'));
+      const code = name.startsWith('unsupported-')
+        ? 'unsupported-encoding'
+        : name.startsWith('malformed-')
+          ? 'invalid-xml'
+          : undefined;
+      if (code) {
+        await assert.rejects(
+          generateSampleFile(file, options),
+          (error) => error.problems.some((p) => p.code === code),
+          name,
+        );
+        continue;
+      }
+      const sample = await generateSampleFile(file, options);
+      okay(sample);
+      assert.equal(sample.json, expected[name], name);
+    }
+    // The text API: a decoded text keeps its declaration of ISO-8859-1, yet libxml2 reads the characters given.
+    const text = Buffer.from(ENCODING_CASES.latin1, 'base64').toString('latin1');
+    const sample = await generateSample({ entry: 'a.xsd', files: { 'a.xsd': text } }, options);
+    okay(sample);
+    assert.equal(sample.json, 'M\u00fcller');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 test('xs:redefine of a group and an attribute group with self-references gives the ordinary form', async () => {
   const files = {
@@ -1033,6 +1179,37 @@ test('xs:redefine of a group and an attribute group with self-references gives t
   await assert.rejects(generateSample({ entry: 'schema.xsd', files: typeRedefined }, options), (error) =>
     error.problems.some((p) => p.code === 'unsupported-redefine'),
   );
+});
+test('schema size limits apply to the in-memory API, the file API, the root listing and the CLI', async () => {
+  const text = simple.files['a.xsd'];
+  const size = text.length; // ASCII only
+  okay(await generateSample(simple, { ...options, limits: { maxFileBytes: size } }));
+  await assert.rejects(generateSample(simple, { ...options, limits: { maxFileBytes: size - 1 } }), (error) =>
+    error.problems.some((p) => p.code === 'resource-limit' && p.message.includes(`maxFileBytes ${size - 1}`)),
+  );
+  assert.throws(() => listRoots(simple, { limits: { maxTotalBytes: size - 1 } }), /maxTotalBytes/);
+  assert.equal(listRoots(simple, { limits: { maxDocuments: 1 } }).roots.length, 1);
+  await assert.rejects(generateSample(simple, { ...options, limits: { maxDocuments: 0 } }), RangeError);
+  const dir = mkdtempSync(join(tmpdir(), 'xsd-limits-'));
+  try {
+    const file = join(dir, 'a.xsd');
+    writeFileSync(file, text);
+    const { listRootsFile } = await import('../dist/node.js');
+    assert.throws(
+      () => listRootsFile(file, { limits: { maxFileBytes: 10 } }),
+      (error) =>
+        error.problems.some(
+          (p) => p.code === 'resource-limit' && /has \d+ bytes, more than maxFileBytes 10/.test(p.message),
+        ),
+    );
+    const c = capture();
+    assert.equal(await run([file, '--max-file-bytes', '10'], c.io, validator), 1);
+    assert.match(c.result.err, /maxFileBytes 10/);
+    assert.equal(await run([file, '--max-documents', '0'], c.io, validator), 1);
+    assert.equal(await run([file, '--list-roots', '--max-total-bytes', String(size)], c.io, validator), 0);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 test('missing imports fail before a sample is returned', async () => {
   await assert.rejects(
@@ -1479,14 +1656,50 @@ test('profiles do not freeze retries at a date outside unsupported temporal boun
   okay(sample);
   assert.ok(sample.json >= '2027-01-01');
 });
+test('unsafe locations are unsafe-input, also an entry symlink that leads out', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'xsd-unsafe-'));
+  try {
+    const base = join(dir, 'base');
+    mkdirSync(base);
+    writeFileSync(join(dir, 'outside.xsd'), simple.files['a.xsd']);
+    symlinkSync(join(dir, 'outside.xsd'), join(base, 'link.xsd'));
+    const importing = (location) =>
+      schema(`<xs:include schemaLocation="${location}"/><xs:element name="R" type="xs:string"/>`);
+    for (const location of [
+      '../outside.xsd',
+      join(dir, 'outside.xsd'),
+      `file://${join(dir, 'outside.xsd')}`,
+      'link.xsd',
+    ]) {
+      const entry = join(base, 'main.xsd');
+      writeFileSync(entry, importing(location));
+      await assert.rejects(
+        generateSampleFile(entry, { ...options, root: 'R' }),
+        (error) =>
+          error.problems.some((p) => p.code === 'unsafe-input') &&
+          !error.problems.some((p) => p.code === 'missing-file'),
+        location,
+      );
+    }
+    // Without baseDirectory, the base is where the entry is named, not where its symlink leads.
+    await assert.rejects(generateSampleFile(join(base, 'link.xsd'), options), (error) =>
+      error.problems.some((p) => p.code === 'unsafe-input'),
+    );
+    await assert.rejects(generateSampleFile(join(base, 'main.xsd'), { ...options, limits: [] }), TypeError);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
 test('oversized file is refused by the file reader before returning its contents', async () => {
   const { fileInput } = await import('../dist/node.js');
   const dir = mkdtempSync(join(tmpdir(), 'xsd-size-'));
   try {
     const file = join(dir, 'large.xsd');
-    writeFileSync(file, ' '.repeat(2 * 1024 * 1024 + 1));
+    writeFileSync(file, ' '.repeat(4 * 1024 * 1024 + 1));
     const source = fileInput(file);
-    assert.throws(() => source.files(source.entry), /2 MiB/);
+    assert.throws(() => source.files(source.entry), /more than maxFileBytes 4194304/);
+    const raised = fileInput(file, { limits: { maxFileBytes: 4 * 1024 * 1024 + 1 } });
+    assert.equal(raised.files(raised.entry).bytes, 4 * 1024 * 1024 + 1);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

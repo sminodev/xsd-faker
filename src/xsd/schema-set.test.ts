@@ -173,6 +173,68 @@ describe('SchemaSet', () => {
       );
     });
   });
+
+  describe('limits', () => {
+    const files = {
+      'a.xsd': `<xs:schema ${XS}><xs:include schemaLocation="b.xsd"/></xs:schema>`,
+      'b.xsd': `<xs:schema ${XS}><xs:element name="ä"/></xs:schema>`,
+    };
+    const bytes = (path: keyof typeof files) => new TextEncoder().encode(files[path]).length;
+    const run = (limits: ConstructorParameters<typeof SchemaSet>[2]) => {
+      const problems = new Problems();
+      new SchemaSet(files, problems, limits).load('a.xsd');
+      return problems.list;
+    };
+
+    it('count UTF-8 bytes per file and in total, and documents, at the limit and one beyond', () => {
+      const largest = Math.max(bytes('a.xsd'), bytes('b.xsd'));
+      expect(run({ maxFileBytes: largest })).toEqual([]);
+      const refused = (limits: Parameters<typeof run>[0], text: string) => {
+        const list = run(limits);
+        expect(list.map((p) => p.code)).toEqual(['resource-limit']);
+        expect(list[0]?.message).toContain(text);
+      };
+      refused({ maxFileBytes: largest - 1 }, `maxFileBytes ${largest - 1}`);
+      const total = bytes('a.xsd') + bytes('b.xsd');
+      expect(run({ maxTotalBytes: total })).toEqual([]);
+      refused({ maxTotalBytes: total - 1 }, `maxTotalBytes ${total - 1}`);
+      expect(run({ maxDocuments: 2 })).toEqual([]);
+      refused({ maxDocuments: 1 }, 'maxDocuments 1');
+    });
+
+    it('count each chameleon copy as a document and with its bytes again, the file limit once per file', () => {
+      const chameleon = {
+        'a.xsd': `<xs:schema ${XS} targetNamespace="urn:a"><xs:include schemaLocation="c.xsd"/><xs:import namespace="urn:b" schemaLocation="b.xsd"/></xs:schema>`,
+        'b.xsd': `<xs:schema ${XS} targetNamespace="urn:b"><xs:include schemaLocation="c.xsd"/></xs:schema>`,
+        'c.xsd': `<xs:schema ${XS}><xs:element name="E"/></xs:schema>`,
+      };
+      const length = (text: string) => new TextEncoder().encode(text).length;
+      // c.xsd is parsed twice, once per namespace it is included into.
+      const size = Object.values(chameleon).reduce((n, text) => n + length(text), 0) + length(chameleon['c.xsd']);
+      const check = (limits: ConstructorParameters<typeof SchemaSet>[2]) => {
+        const problems = new Problems();
+        new SchemaSet(chameleon, problems, limits).load('a.xsd');
+        return problems.list.map((p) => p.code);
+      };
+      expect(check({ maxDocuments: 4, maxTotalBytes: size })).toEqual([]);
+      expect(check({ maxTotalBytes: size - 1 })).toEqual(['resource-limit']);
+      expect(check({ maxDocuments: 3 })).toEqual(['resource-limit']);
+      expect(check({ maxFileBytes: length(chameleon['a.xsd']) })).toEqual([]);
+    });
+
+    it('accept only a plain object', () => {
+      for (const value of [5, 'x', [], new Map()]) {
+        expect(() => new SchemaSet(files, new Problems(), value as never)).toThrow(TypeError);
+      }
+    });
+
+    it('accept only positive safe integers', () => {
+      for (const value of [0, -1, 1.5, Number.NaN, Infinity, 2 ** 53]) {
+        expect(() => new SchemaSet(files, new Problems(), { maxFileBytes: value })).toThrow(RangeError);
+      }
+    });
+  });
+
   it('loads a chameleon include once per namespace it is included into', () => {
     const { set, problems } = load(
       {

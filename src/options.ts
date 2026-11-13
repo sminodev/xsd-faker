@@ -1,4 +1,5 @@
 import type { GenerateOptions } from './index.js';
+import { effectiveLimits } from './xsd/schema-set.js';
 function integer(name: string, value: number | undefined, min: number, max: number): void {
   if (value !== undefined && (!Number.isSafeInteger(value) || value < min || value > max)) {
     throw new RangeError(`${name} must be an integer from ${min} to ${max}`);
@@ -11,6 +12,7 @@ export function checkOptions(options: GenerateOptions): void {
   integer('maxTotalDepth', options.maxTotalDepth, 1, 256);
   integer('maxNodes', options.maxNodes, 1, 100000);
   integer('attempts', options.attempts, 1, 100);
+  effectiveLimits(options.limits);
   // Optional expansion must stop before the hard limit, or every recursive schema would end in depth-limit.
   if (options.maxDepth !== undefined && options.maxDepth >= (options.maxTotalDepth ?? 64)) {
     throw new RangeError('maxDepth must be lower than maxTotalDepth');

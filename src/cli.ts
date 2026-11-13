@@ -2,7 +2,16 @@ import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, relative, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { generateSampleFiles, listRootsFile } from './node.js';
-import type { BatchOptions, NilMode, OptionalMode, ProfileName, Sample, ValueLists, XmlValidator } from './index.js';
+import type {
+  BatchOptions,
+  NilMode,
+  OptionalMode,
+  ProfileName,
+  Sample,
+  SchemaLimits,
+  ValueLists,
+  XmlValidator,
+} from './index.js';
 export interface CliOutput {
   stdout(text: string): void;
   stderr(text: string): void;
@@ -40,6 +49,9 @@ Generate XML and JSON fixtures from XML Schema 1.0. No network access.
   --text-property <name>          Simple/mixed content property (value)
   --schema-location <mode>        none, relative, absolute (default: none)
   --base-dir <directory>          Allowed schema directory (entry directory)
+  --max-file-bytes <number>       Bytes of one schema document (4194304)
+  --max-total-bytes <number>      Bytes of all schema documents (16777216)
+  --max-documents <number>        Schema documents, chameleon copies included (128)
   --attempts <number>             Seeds tried per document (default: 10)
   --template                     Template, not an accepted test instance
   --no-element-values            Template only
@@ -127,6 +139,9 @@ export async function run(
         'text-property': { type: 'string' },
         'schema-location': { type: 'string' },
         'base-dir': { type: 'string' },
+        'max-file-bytes': { type: 'string' },
+        'max-total-bytes': { type: 'string' },
+        'max-documents': { type: 'string' },
         template: { type: 'boolean' },
         'no-element-values': { type: 'boolean' },
         'no-attribute-values': { type: 'boolean' },
@@ -141,7 +156,19 @@ export async function run(
       throw new TypeError('provide one entry XSD; see --help');
     }
     const entry = positionals[0];
-    const access = flags['base-dir'] ? { baseDirectory: flags['base-dir'] } : {};
+    const limits: SchemaLimits = {};
+    for (const [flag, key] of [
+      ['max-file-bytes', 'maxFileBytes'],
+      ['max-total-bytes', 'maxTotalBytes'],
+      ['max-documents', 'maxDocuments'],
+    ] as const) {
+      const value = integer(flag, flags[flag]);
+      if (value !== undefined) limits[key] = value;
+    }
+    const access = {
+      ...(flags['base-dir'] ? { baseDirectory: flags['base-dir'] } : {}),
+      ...(Object.keys(limits).length > 0 ? { limits } : {}),
+    };
     if (flags['list-roots']) {
       io.stdout(`${JSON.stringify(listRootsFile(entry, access), null, 2)}\n`);
       return 0;
@@ -222,6 +249,7 @@ export async function run(
       ...(flags.date ? { referenceDate: flags.date } : {}),
       ...(flags.values ? { samples: readValues(flags.values) } : {}),
       ...(validator ? { validator } : {}),
+      ...(access.limits ? { limits: access.limits } : {}),
     };
     const location = enumeration('schema-location', flags['schema-location'], ['none', 'relative', 'absolute'], 'none');
     if (location !== 'none') {

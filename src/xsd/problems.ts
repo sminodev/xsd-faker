@@ -8,6 +8,8 @@ export const PROBLEM_CODES = [
   'not-a-schema',
   'unknown-prefix',
   'unsupported-redefine',
+  'neutralized-doctype',
+  'unsupported-encoding',
   // choosing the root element
   'root-required',
   'unknown-root',

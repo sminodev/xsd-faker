@@ -1,5 +1,5 @@
 import { readFileSync, realpathSync, statSync } from 'node:fs';
-import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import {
   type BatchOptions,
   type GenerateInput,
@@ -9,44 +9,68 @@ import {
   generateSamples,
   listRoots,
 } from './index.js';
-import { isAbsoluteUri } from './xsd/schema-set.js';
+import { decodeSchema } from './xsd/encoding.js';
+import {
+  effectiveLimits,
+  isAbsoluteUri,
+  SchemaLimitError,
+  type SchemaLimits,
+  UnsafeLocationError,
+} from './xsd/schema-set.js';
 export * from './index.js';
 export interface FileAccessOptions {
   /** Allowed schema directory. Defaults to the entry file's directory; symlinks cannot escape it. */
   baseDirectory?: string;
+  /** The schema size limits; `maxFileBytes` is also checked against the file size before reading. */
+  limits?: SchemaLimits;
 }
 export function fileInput(entryFile: string, access: FileAccessOptions = {}): GenerateInput {
   try {
     return localInput(entryFile, access);
   } catch (error) {
-    if (error instanceof GenerateError) throw error;
+    // Invalid options stay what they are elsewhere in the API.
+    if (error instanceof GenerateError || error instanceof TypeError || error instanceof RangeError) throw error;
     const message = error instanceof Error ? error.message : String(error);
     throw new GenerateError(message, [{ code: 'missing-file', severity: 'error', message, file: entryFile }]);
   }
 }
+function realpathOrSelf(path: string): string {
+  try {
+    return realpathSync(path);
+  } catch {
+    return path;
+  }
+}
 function localInput(entryFile: string, access: FileAccessOptions): GenerateInput {
-  const entry = realpathSync(resolve(entryFile));
-  const base = realpathSync(resolve(access.baseDirectory ?? dirname(entry)));
+  const { maxFileBytes } = effectiveLimits(access.limits);
+  // The entry where it is named, not where a symlink leads: its directory is the default base.
+  const lexical = resolve(entryFile);
+  const named = join(realpathOrSelf(dirname(lexical)), basename(lexical));
+  const base = realpathSync(resolve(access.baseDirectory ?? dirname(named)));
   const confined = (file: string): boolean => {
     const part = relative(base, file);
     return part !== '..' && !part.startsWith(`..${sep}`) && !isAbsolute(part);
   };
-  if (!confined(entry)) {
-    throw new GenerateError('entry is outside baseDirectory', [
-      { code: 'unsafe-input', severity: 'error', message: 'entry is outside baseDirectory', file: entryFile },
-    ]);
-  }
+  const unsafe = (message: string) =>
+    new GenerateError(message, [{ code: 'unsafe-input', severity: 'error', message, file: entryFile }]);
+  if (!confined(named)) throw unsafe('entry is outside baseDirectory');
+  const entry = realpathSync(named);
+  if (!confined(entry)) throw unsafe('entry is a symlink that leads out of baseDirectory');
   return {
     entry: relative(base, entry).split(sep).join('/'),
     files(path) {
-      if (isAbsoluteUri(path) || isAbsolute(path)) {
+      // A file URI or an absolute path names a place outside the boundary; other URIs are simply not fetched.
+      if (/^file:/i.test(path) || isAbsolute(path)) {
+        throw new UnsafeLocationError('only relative local schema locations are allowed');
+      }
+      if (isAbsoluteUri(path)) {
         throw new Error(
           'only relative local schema locations are allowed; use an in-memory source to map external URIs',
         );
       }
       const candidate = resolve(base, ...path.split('/'));
       if (!confined(candidate)) {
-        throw new Error('schema path escapes baseDirectory');
+        throw new UnsafeLocationError('the path escapes baseDirectory');
       }
       let actual: string;
       try {
@@ -55,10 +79,15 @@ function localInput(entryFile: string, access: FileAccessOptions): GenerateInput
         return undefined;
       }
       if (!confined(actual)) {
-        throw new Error('schema symlink escapes baseDirectory');
+        throw new UnsafeLocationError('a symlink leads out of baseDirectory');
       }
-      if (statSync(actual).size > 2 * 1024 * 1024) throw new Error('schema input exceeds the 2 MiB file limit');
-      return readFileSync(actual, 'utf8');
+      const size = statSync(actual).size;
+      if (size > maxFileBytes) {
+        throw new SchemaLimitError(`schema document ${path} has ${size} bytes, more than maxFileBytes ${maxFileBytes}`);
+      }
+      // Decoded by its byte order mark and XML declaration; the limits count the file's bytes.
+      const bytes = readFileSync(actual);
+      return { text: decodeSchema(bytes, path), bytes: bytes.length };
     },
   };
 }
@@ -69,5 +98,5 @@ export async function generateSampleFiles(entry: string, options: BatchOptions &
   return generateSamples(fileInput(entry, options), options);
 }
 export function listRootsFile(entry: string, options: FileAccessOptions = {}) {
-  return listRoots(fileInput(entry, options));
+  return listRoots(fileInput(entry, options), options);
 }

@@ -27,7 +27,9 @@ import {
   attr,
   clark,
   type Component,
+  effectiveLimits,
   type SchemaDocument,
+  type SchemaLimits,
   SchemaSet,
   type SchemaSource,
   XS,
@@ -51,10 +53,11 @@ export type { ProfileName, ProfileOptions, ValueLists } from './values/profiles.
 export type { GroupOccurrence, InstanceElement, InstanceNode } from './xml/tree.js';
 export { serializeXml } from './xml/serialize.js';
 export type { Problem, ProblemCode } from './xsd/problems.js';
-export type { SchemaSource } from './xsd/schema-set.js';
+export type { SchemaLimits, SchemaSource, SchemaText } from './xsd/schema-set.js';
+export { DEFAULT_LIMITS, SchemaEncodingError, SchemaLimitError, UnsafeLocationError } from './xsd/schema-set.js';
 export { validateXml, SchemaCompileError } from './validate/xmllint.js';
 export type { SchemaFiles, Verdict, XmlValidator } from './validate/xmllint.js';
-export interface GenerateOptions {
+export interface GenerateOptions extends LoadOptions {
   root?: string;
   seed?: number;
   /** Default: none. Separate settings take precedence. */
@@ -101,6 +104,11 @@ export interface GenerateInput {
   files: SchemaSource;
   entry: string;
 }
+/** Options of reading the schema set, shared by generation and the root listing. */
+export interface LoadOptions {
+  /** Size limits of the schema input; see `SchemaLimits`. */
+  limits?: SchemaLimits;
+}
 export type SampleStatus = 'valid' | 'invalid' | 'incomplete' | 'unvalidated' | 'template';
 export interface Sample {
   xml: string;
@@ -141,13 +149,16 @@ interface Prepared {
   loading: Problem[];
   schemas: SchemaFiles;
 }
-function load(input: GenerateInput): {
+function load(
+  input: GenerateInput,
+  options: LoadOptions,
+): {
   set: SchemaSet;
   doc: SchemaDocument;
   problems: Problem[];
 } {
   const problems = new Problems();
-  const set = new SchemaSet(input.files, problems);
+  const set = new SchemaSet(input.files, problems, options.limits);
   const doc = set.load(input.entry);
   if (!doc || problems.list.some((p) => p.severity === 'error')) {
     throw new GenerateError(`cannot load schema: ${problems.list.map((p) => p.message).join('; ')}`, problems.list);
@@ -155,11 +166,37 @@ function load(input: GenerateInput): {
   return { set, doc, problems: problems.list };
 }
 /** Lists declarations across the loaded schema set. Abstract roots are visible but not generated directly. */
-export function listRoots(input: GenerateInput): {
+export function listRoots(
+  input: GenerateInput,
+  options: LoadOptions = {},
+): {
   roots: RootElement[];
   problems: Problem[];
 } {
-  const { set, doc, problems } = load(input);
+  try {
+    return rootsOf(input, options);
+  } catch (error) {
+    throw tooDeep(error);
+  }
+}
+/**
+ * A schema that nests deeper than the call stack reaches is a `resource-limit`, never a RangeError leaving the API;
+ * there is no schema and no document then.
+ */
+function tooDeep(error: unknown): unknown {
+  if (!(error instanceof RangeError) || !/call stack/i.test(error.message)) return error;
+  const message = 'the schema nests deeper than the generator can follow';
+  return new GenerateError(message, [{ code: 'resource-limit', severity: 'error', message }]);
+}
+function rootsOf(
+  input: GenerateInput,
+  options: LoadOptions,
+): {
+  roots: RootElement[];
+  problems: Problem[];
+} {
+  effectiveLimits(options.limits);
+  const { set, doc, problems } = load(input, options);
   const roots = [...set.components.element].map(([expandedName, component]) => ({
     name: attr(component.node, 'name') ?? '',
     namespace: component.doc.targetNamespace,
@@ -171,7 +208,7 @@ export function listRoots(input: GenerateInput): {
   return { roots, problems };
 }
 function prepare(input: GenerateInput, options: GenerateOptions): Prepared {
-  const { set, doc, problems } = load(input);
+  const { set, doc, problems } = load(input, options);
   const choices = [...set.components.element].filter(([, c]) => c.doc === doc);
   let id: string | undefined;
   const requested = options.root;
@@ -376,7 +413,11 @@ async function generatePrepared(
 /** Generates one document. Inspect status; a returned object is not automatically a valid instance. */
 export async function generateSample(input: GenerateInput, options: GenerateOptions = {}): Promise<Sample> {
   checkOptions(options);
-  return generatePrepared(prepare(input, options), options);
+  try {
+    return await generatePrepared(prepare(input, options), options);
+  } catch (error) {
+    throw tooDeep(error);
+  }
 }
 export interface BatchOptions extends GenerateOptions {
   count?: number;
@@ -403,6 +444,13 @@ export interface SampleBatch {
 const FAILURE_LIMIT = 2;
 /** Bounded branch exploration. Coverage counts accepted XML instances, not attempts or templates. */
 export async function generateSamples(input: GenerateInput, options: BatchOptions = {}): Promise<SampleBatch> {
+  try {
+    return await batch(input, options);
+  } catch (error) {
+    throw tooDeep(error);
+  }
+}
+async function batch(input: GenerateInput, options: BatchOptions): Promise<SampleBatch> {
   checkOptions(options);
   const count = options.count ?? 1;
   if (!Number.isSafeInteger(count) || count < 1 || count > 1000) {

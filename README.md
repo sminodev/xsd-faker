@@ -158,7 +158,8 @@ npm run format:check
 
 [Development](docs/development.md) describes the modules and tests.
 [Contributing](CONTRIBUTING.md) explains how to add a focused change.
-[Security](SECURITY.md) documents the input boundary and resource limits.
+[Security](SECURITY.md) documents the input boundary, the DOCTYPE profile and the schema size limits
+(`limits`, `--max-file-bytes`, `--max-total-bytes`, `--max-documents`).
 
 ## License
 

@@ -1,4 +1,6 @@
 import { DOMParser, type Element, type Node } from '@xmldom/xmldom';
+import { scanDoctype } from './doctype.js';
+import { SchemaEncodingError, utf8Declaration } from './encoding.js';
 import { type At, messageOf, type Problems } from './problems.js';
 
 export const XS = 'http://www.w3.org/2001/XMLSchema';
@@ -26,8 +28,69 @@ export interface Component {
   doc: SchemaDocument;
 }
 
-/** The schema texts by path, or a function that reads them. */
-export type SchemaSource = Readonly<Record<string, string>> | ((path: string) => string | undefined);
+/** A schema text a reader decoded itself, with the byte count of its file for the size limits. */
+export interface SchemaText {
+  text: string;
+  bytes: number;
+}
+
+/**
+ * The schema texts by path, or a function that reads them. A text is already decoded: an encoding in its XML
+ * declaration is not read. A function may return the file's byte count with the text.
+ */
+export type SchemaSource = Readonly<Record<string, string>> | ((path: string) => string | SchemaText | undefined);
+
+/** Size limits of the schema input; each one a positive safe integer. */
+export interface SchemaLimits {
+  /** Bytes of one schema file (UTF-8 bytes of a text). Default: 4194304 (4 MiB). */
+  maxFileBytes?: number;
+  /** Bytes of all schema documents, each chameleon copy counted again. Default: 16777216 (16 MiB). */
+  maxTotalBytes?: number;
+  /** Loaded schema documents, each chameleon copy counted. Default: 128. */
+  maxDocuments?: number;
+}
+
+export const DEFAULT_LIMITS: Readonly<Required<SchemaLimits>> = {
+  maxFileBytes: 4 * 1024 * 1024,
+  maxTotalBytes: 16 * 1024 * 1024,
+  maxDocuments: 128,
+};
+
+/** The effective limits: the defaults with the given values, which must be positive safe integers. */
+export function effectiveLimits(limits: SchemaLimits | undefined): Required<SchemaLimits> {
+  const plain =
+    typeof limits === 'object' &&
+    limits !== null &&
+    [Object.prototype, null].includes(Object.getPrototypeOf(limits) as object | null);
+  if (limits !== undefined && !plain) {
+    throw new TypeError('limits must be a plain object');
+  }
+  const out = { ...DEFAULT_LIMITS };
+  for (const key of Object.keys(DEFAULT_LIMITS) as (keyof SchemaLimits)[]) {
+    const value = limits?.[key];
+    if (value === undefined) continue;
+    if (!Number.isSafeInteger(value) || value < 1) {
+      throw new RangeError(`limits.${key} must be a positive safe integer`);
+    }
+    out[key] = value;
+  }
+  return out;
+}
+
+/** Thrown by a schema source when a file is too large to read; the set reports it as `resource-limit`. */
+export class SchemaLimitError extends Error {
+  override name = 'SchemaLimitError';
+}
+
+/**
+ * Thrown by a schema source for a location it must not read: outside its base directory, through a symlink that
+ * leads out, an absolute path or a URI. The set reports it as `unsafe-input`.
+ */
+export class UnsafeLocationError extends Error {
+  override name = 'UnsafeLocationError';
+}
+
+export { SchemaEncodingError } from './encoding.js';
 
 const isElement = (node: Node): node is Element => node.nodeType === 1;
 
@@ -155,6 +218,9 @@ export class SchemaSet {
   /** Exact texts parsed for this run; validation must use the same bytes. */
   readonly sourceTexts = new Map<string, string>();
   private loadedBytes = 0;
+  /** the bytes of each file read, charged again for each further chameleon copy */
+  private readonly fileBytes = new Map<string, number>();
+  readonly limits: Required<SchemaLimits>;
   /** Each group or attribute group redefined in xs:redefine, with the definition it replaces. */
   private readonly replaced = new Map<Element, Component>();
   /**
@@ -174,12 +240,14 @@ export class SchemaSet {
     group: new Map(),
     attributeGroup: new Map(),
   };
-  private readonly read: (path: string) => string | undefined;
+  private readonly read: (path: string) => string | SchemaText | undefined;
 
   constructor(
     source: SchemaSource,
     private readonly problems: Problems,
+    limits?: SchemaLimits,
   ) {
+    this.limits = effectiveLimits(limits);
     this.read =
       typeof source === 'function' ? source : (path) => (Object.hasOwn(source, path) ? source[path] : undefined);
   }
@@ -195,25 +263,33 @@ export class SchemaSet {
     if (this.documents.has(key)) {
       return this.documents.get(key) ?? undefined;
     }
-    if (this.documents.size >= 128) {
-      this.problems.error('resource-limit', 'schema set exceeds 128 documents', from);
+    if (this.documents.size >= this.limits.maxDocuments) {
+      this.problems.error(
+        'resource-limit',
+        `schema set exceeds maxDocuments ${this.limits.maxDocuments} with ${path}`,
+        from ?? { file: path },
+      );
       return undefined;
     }
     this.documents.set(key, null);
     const at = { ...from, file: from?.file ?? path };
+    // A further parse copy of a file already read (a chameleon include into another namespace) counts again.
+    const copy = this.sourceTexts.has(path);
     const text = this.text(path, at);
-    if (text === undefined) {
+    if (text === undefined || (copy && !this.charge(path, this.fileBytes.get(path) ?? 0))) {
       return undefined;
     }
     let root: Element | null;
     try {
       const xml = new DOMParser({
+        // XML 1.0 ends lines with CR LF and CR only; U+0085, U+2028 and U+2029 stay characters, as libxml2 reads them.
+        normalizeLineEndings: (source: string) => source.replace(/\r\n?/g, '\n'),
         onError: (level, message) => {
           if (level !== 'warning') {
             throw new Error(message);
           }
         },
-      }).parseFromString(text.replace(/^[\uFEFF\s]+/, ''), 'text/xml');
+      }).parseFromString(text.replace(/^[\uFEFF \t\n\r]+/, ''), 'text/xml');
       root = xml.documentElement;
     } catch (e) {
       this.problems.error('invalid-xml', `${path}: ${messageOf(e)}`, { file: path });
@@ -366,30 +442,74 @@ export class SchemaSet {
     if (known !== undefined) {
       return known;
     }
-    let text: string | undefined;
+    let read: string | SchemaText | undefined;
     try {
-      text = this.read(path);
+      read = this.read(path);
     } catch (e) {
-      this.problems.error('missing-file', `schema document ${path} could not be read: ${messageOf(e)}`, at);
+      if (e instanceof SchemaLimitError) {
+        this.problems.error('resource-limit', e.message, at);
+      } else if (e instanceof UnsafeLocationError) {
+        this.problems.error('unsafe-input', `schema document ${path} is not read: ${e.message}`, at);
+      } else if (e instanceof SchemaEncodingError) {
+        this.problems.error(e.code, e.message, at);
+      } else {
+        this.problems.error('missing-file', `schema document ${path} could not be read: ${messageOf(e)}`, at);
+      }
       return undefined;
     }
-    if (text === undefined || text === null) {
+    if (read === undefined || read === null) {
       this.problems.error('missing-file', `schema document ${path} not found`, at);
       return undefined;
     }
-    text = String(text);
-    const bytes = new TextEncoder().encode(text).length;
-    this.loadedBytes += bytes;
-    if (bytes > 2 * 1024 * 1024 || this.loadedBytes > 16 * 1024 * 1024) {
-      this.problems.error('resource-limit', 'schema input exceeds the 2 MiB file or 16 MiB set limit', { file: path });
+    let text = typeof read === 'object' ? String(read.text) : String(read);
+    // Counted before anything parses the text: the file's bytes if the reader knows them, else the UTF-8 bytes.
+    const bytes = typeof read === 'object' ? read.bytes : new TextEncoder().encode(text).length;
+    if (bytes > this.limits.maxFileBytes) {
+      this.problems.error(
+        'resource-limit',
+        `schema document ${path} has ${bytes} bytes, more than maxFileBytes ${this.limits.maxFileBytes}`,
+        { file: path },
+      );
       return undefined;
     }
-    if (/<!DOCTYPE\b/i.test(text)) {
-      this.problems.error('unsafe-input', 'DOCTYPE declarations are not accepted in schema input', { file: path });
+    this.fileBytes.set(path, bytes);
+    if (!this.charge(path, bytes)) return undefined;
+    const scan = scanDoctype(text);
+    if (scan.kind === 'invalid') {
+      this.problems.error('invalid-xml', `${path}: ${scan.reason}`, { file: path });
       return undefined;
     }
+    if (scan.kind === 'unsafe') {
+      this.problems.error('unsafe-input', `${path}: ${scan.reason}; DTDs are not processed`, { file: path });
+      return undefined;
+    }
+    if (scan.kind === 'neutralized') {
+      // Parser and validator get the same text, without the DOCTYPE.
+      this.problems.warning(
+        'neutralized-doctype',
+        `${path}: the DOCTYPE has no effect and is left out; its identifiers are not read`,
+        { file: path },
+      );
+      text = scan.text;
+    }
+    // The text is decoded already; libxml2 reads it as UTF-8, whatever the declaration said.
+    text = utf8Declaration(text);
     this.sourceTexts.set(path, text);
     return text;
+  }
+
+  /** Adds bytes to the total budget; false, with a problem, once it is exceeded. */
+  private charge(path: string, bytes: number): boolean {
+    this.loadedBytes += bytes;
+    if (this.loadedBytes <= this.limits.maxTotalBytes) return true;
+    this.problems.error(
+      'resource-limit',
+      `schema set exceeds maxTotalBytes ${this.limits.maxTotalBytes} with ${path}`,
+      {
+        file: path,
+      },
+    );
+    return false;
   }
 
   /** Resolves a QName written in an attribute value against the namespaces in scope of `node`. */
