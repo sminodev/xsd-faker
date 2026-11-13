@@ -36,7 +36,7 @@ export interface FakerOptions {
   base?: LocaleData;
   /**
    * The country of the faker-js cities, as a code such as `FR` or as code and name, where the faker-js locale does not
-   * name one in its metadata.
+   * name one in its metadata. Only for a definition with cities; without any it is a `TypeError`.
    */
   country?: string | Region;
 }
@@ -112,6 +112,12 @@ export function localeFromFaker(definition: FakerLocaleDefinition, options: Fake
   // City, postcode, state and country come from one source: all from faker-js where it has cities, with postcodes
   // from its pattern, and otherwise all from the base locale, so an address never mixes two countries.
   const cities = clean(location.city_name);
+  if (cities.length === 0 && options.country !== undefined) {
+    throw new TypeError(
+      'country names the country of the faker-js cities, and this definition has none: without cities, city, ' +
+        'postcode, state and country all come from the base locale',
+    );
+  }
   let country: Region | undefined;
   if (cities.length > 0) {
     const patterns = postcodes.length > 0 ? postcodes : ['#####'];

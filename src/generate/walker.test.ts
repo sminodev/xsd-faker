@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createRng } from '../rng.js';
-import type { ValueSource } from '../values/source.js';
+import type { ValueContext, ValueSource } from '../values/source.js';
 import { serializeXml } from '../xml/serialize.js';
 import { Problems } from '../xsd/problems.js';
 import { SchemaSet, XS, xsChildren } from '../xsd/schema-set.js';
@@ -156,6 +156,58 @@ describe('Walker: types and attributes', () => {
       <xs:element name="a" type="Missing"/><xs:group ref="Nowhere"/>
     </xs:sequence></xs:complexType></xs:element>`;
     expect(walk(body).problems.map((p) => p.code)).toEqual(['unknown-type', 'unknown-group']);
+  });
+});
+
+describe('Walker: what a value source learns', () => {
+  /** Runs the walker and returns, for each value asked for, its path and what the context says about it. */
+  function asked(body: string, options: Partial<WalkOptions> = {}) {
+    const contexts: ValueContext[] = [];
+    walk(body, { values: { value: (context) => (contexts.push(context), '1') }, ...options });
+    return contexts.map((c) => ({
+      path: c.path.join('/'),
+      typeName: c.typeName,
+      baseTypeNames: c.baseTypeNames,
+      scopes: c.scopes?.map((s) => `${s.name}#${s.instanceId}`),
+    }));
+  }
+
+  it('names the type of a value and the types it derives from, nearest first', () => {
+    const body = `<xs:element name="R"><xs:complexType><xs:sequence>
+        <xs:element name="a" type="Code"/>
+        <xs:element name="b"><xs:simpleType><xs:restriction base="Code"><xs:maxLength value="3"/></xs:restriction></xs:simpleType></xs:element>
+        <xs:element name="c" type="xs:string"/>
+        <xs:element name="d" type="Money"/>
+      </xs:sequence><xs:attribute name="e" type="Narrow" use="required"/></xs:complexType></xs:element>
+      <xs:simpleType name="Base"><xs:restriction base="xs:token"/></xs:simpleType>
+      <xs:simpleType name="Code"><xs:restriction base="Base"/></xs:simpleType>
+      <xs:simpleType name="Narrow"><xs:restriction base="Code"><xs:length value="1"/></xs:restriction></xs:simpleType>
+      <xs:complexType name="Money"><xs:simpleContent><xs:extension base="Amount"/></xs:simpleContent></xs:complexType>
+      <xs:simpleType name="Amount"><xs:restriction base="xs:decimal"/></xs:simpleType>`;
+    const types = asked(body).map(({ path, typeName, baseTypeNames }) => ({ path, typeName, baseTypeNames }));
+    expect(types).toEqual([
+      { path: 'R/e', typeName: '{urn:t}Narrow', baseTypeNames: ['{urn:t}Code', '{urn:t}Base'] },
+      { path: 'R/a', typeName: '{urn:t}Code', baseTypeNames: ['{urn:t}Base'] },
+      { path: 'R/b', typeName: undefined, baseTypeNames: ['{urn:t}Code', '{urn:t}Base'] },
+      { path: 'R/c', typeName: undefined, baseTypeNames: [] },
+      { path: 'R/d', typeName: '{urn:t}Money', baseTypeNames: ['{urn:t}Amount'] },
+    ]);
+  });
+
+  it('gives each occurrence of an element of complex type its own scope', () => {
+    const body = `<xs:element name="R"><xs:complexType><xs:sequence>
+        <xs:element name="P" maxOccurs="2"><xs:complexType><xs:sequence>
+          <xs:element name="n" type="xs:string"/></xs:sequence>
+          <xs:attribute name="id" type="xs:string" use="required"/></xs:complexType></xs:element>
+        <xs:element name="t" type="xs:string"/>
+      </xs:sequence></xs:complexType></xs:element>`;
+    expect(asked(body, { repeat: 2 }).map(({ path, scopes }) => ({ path, scopes }))).toEqual([
+      { path: 'R/P/id', scopes: ['R#1', 'P#2'] },
+      { path: 'R/P/n', scopes: ['R#1', 'P#2'] },
+      { path: 'R/P/id', scopes: ['R#1', 'P#3'] },
+      { path: 'R/P/n', scopes: ['R#1', 'P#3'] },
+      { path: 'R/t', scopes: ['R#1'] },
+    ]);
   });
 });
 

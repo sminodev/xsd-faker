@@ -7,7 +7,7 @@
 import type { Element } from '@xmldom/xmldom';
 import type { Rng } from '../rng.js';
 import { binaryKind, settledValue } from '../values/check.js';
-import type { ValueSource } from '../values/source.js';
+import type { ValueContext, ValueScope, ValueSource } from '../values/source.js';
 import { generateValue } from '../values/generate.js';
 import {
   element,
@@ -33,6 +33,7 @@ import { checkIdentities, type IdentitySlot, identityKind, planIdentities } from
 import {
   attr,
   type Component,
+  type QName,
   type SchemaDocument,
   type SchemaSet,
   XS,
@@ -119,8 +120,8 @@ export interface WalkOptions {
   /** Beyond this depth only required content is generated, so recursive types end. */
   maxDepth: number;
   values: ValueSource;
-  /** Whether the caller supplies the value at this path; such ID and IDREF values are checked, not replanned. */
-  userSupplied?: (path: readonly string[], kind: 'element' | 'attribute') => boolean;
+  /** Whether the caller supplies the value at this place; such ID and IDREF values are checked, not replanned. */
+  userSupplied?: (target: Pick<ValueContext, 'path' | 'kind' | 'typeName' | 'baseTypeNames'>) => boolean;
   rng: Rng;
 }
 
@@ -184,8 +185,18 @@ interface ContentPlan {
   groups: { node: Element; doc: SchemaDocument }[];
   attributes: Map<string, AttributeUse>;
   simple?: Facets;
+  /** for simple content, the named types from this one down its derivation, the type itself first if it has a name */
+  simpleTypes?: string[];
   mixed: boolean;
 }
+
+/** The named types of a value: its own, if it has a name, and those it derives from, nearest first. */
+interface TypeNames {
+  typeName?: string;
+  baseTypeNames: string[];
+}
+
+const NO_TYPE_NAMES: TypeNames = { baseTypeNames: [] };
 
 /** What the content model says about one JSON object: an element's content or an occurrence of a repeated group. */
 interface ObjectScope {
@@ -243,6 +254,9 @@ export class Walker {
   private readonly written: { facets: Facets; holder: InstanceText | InstanceAttribute }[] = [];
   readonly choices: ChoiceVisit[] = [];
   private readonly settings: ChoiceSettings;
+  /** the elements of complex type being written, outermost first */
+  private readonly scopes: ValueScope[] = [];
+  private instances = 0;
 
   constructor(
     private readonly set: SchemaSet,
@@ -351,7 +365,7 @@ export class Walker {
       } else if (out.nil) {
         // A nil element of a simple type has neither text nor attributes.
       } else if (!(qname.ns === XS && qname.local === 'anyType')) {
-        this.simpleText(out, this.facets.read(qname, declared.from), here, fixed, decl);
+        this.simpleText(out, this.facets.read(qname, declared.from), here, fixed, decl, this.simpleTypeNames(qname));
       } else {
         this.anyType(out, fixed);
       }
@@ -360,7 +374,7 @@ export class Walker {
     } else if (out.nil) {
       // as above
     } else if (declared.kind === 'anonymous') {
-      this.simpleText(out, this.facets.read(declared.node), here, fixed, decl);
+      this.simpleText(out, this.facets.read(declared.node), here, fixed, decl, this.simpleTypeNames(declared.node));
     } else {
       this.anyType(out, fixed);
     }
@@ -441,16 +455,17 @@ export class Walker {
     path: readonly string[],
     fixed: string | undefined,
     decl: Element,
+    names: TypeNames,
   ): void {
     this.identityBoundary(facets);
-    const value = fixed ?? this.value(facets, path, 'element');
+    const value = fixed ?? this.value(facets, path, 'element', names);
     const scope = fixed === undefined ? (enumerationScope(facets, value) ?? decl) : decl;
     this.bindPrefixes(out, facets, value, scope, fixed === undefined);
     const form = jsonFormOf(facets);
     const node = text(value, form.type, form.list);
     out.children = [node];
     this.written.push({ facets, holder: node });
-    this.identity(facets, path, 'element', fixed !== undefined, {
+    this.identity(facets, path, 'element', names, fixed !== undefined, {
       get: () => node.value,
       set: (v) => {
         node.value = v;
@@ -480,6 +495,7 @@ export class Walker {
     facets: Facets,
     path: readonly string[],
     kind: 'element' | 'attribute',
+    names: TypeNames,
     fixed: boolean,
     access: Pick<IdentitySlot, 'get' | 'set'>,
   ): void {
@@ -496,7 +512,7 @@ export class Walker {
       kind: identity,
       facets,
       path: path.join('/'),
-      adjustable: !fixed && !(this.options.userSupplied?.(path, kind) ?? false),
+      adjustable: !fixed && !(this.options.userSupplied?.({ path, kind, ...names }) ?? false),
       validated: this.skipped === 0,
       ...access,
     });
@@ -510,9 +526,17 @@ export class Walker {
     for (const member of facets.members ?? []) this.identityBoundary(member);
   }
 
-  private value(facets: Facets, path: readonly string[], kind: 'element' | 'attribute'): string {
+  private value(facets: Facets, path: readonly string[], kind: 'element' | 'attribute', names: TypeNames): string {
     const name = path.at(-1) ?? '';
-    const value = this.options.values.value({ facets, name, path, kind, rng: this.options.rng });
+    const value = this.options.values.value({
+      facets,
+      name,
+      path,
+      kind,
+      rng: this.options.rng,
+      ...names,
+      scopes: [...this.scopes],
+    });
     if (value === undefined) {
       this.problems.error('no-value', `no value satisfies the facets of ${path.join('/')}`);
       return '';
@@ -520,9 +544,57 @@ export class Walker {
     return value;
   }
 
+  /** The named simple types of a value: the type itself if it has a name, then the bases of its restrictions. */
+  private simpleTypeNames(type: QName | Element): TypeNames {
+    let own: string | undefined;
+    let node: Element | undefined;
+    if ('nodeType' in type) {
+      node = type;
+    } else {
+      if (type.ns === XS) return NO_TYPE_NAMES;
+      own = clark(type.ns, type.local);
+      node = this.set.lookup('simpleType', type)?.node;
+    }
+    const bases: string[] = [];
+    const seen = new Set<Element>();
+    while (node && !seen.has(node)) {
+      seen.add(node);
+      const restriction = xsChild(node, 'restriction');
+      const base = restriction && attr(restriction, 'base');
+      if (!restriction) break;
+      if (base === undefined) {
+        node = xsChild(restriction, 'simpleType');
+        continue;
+      }
+      const name = this.set.resolveQName(restriction, base);
+      if (name.ns === XS) break;
+      bases.push(clark(name.ns, name.local));
+      node = this.set.lookup('simpleType', name)?.node;
+    }
+    return own === undefined ? { baseTypeNames: bases } : { typeName: own, baseTypeNames: bases };
+  }
+
   // --- complex types -------------------------------------------------------------------------------------------
 
+  /** The content of an element of complex type; its instance is a scope for the values inside it. */
   private complex(
+    out: InstanceElement,
+    typeNode: Element,
+    doc: SchemaDocument,
+    path: readonly string[],
+    depth: number,
+    fixed: string | undefined,
+    decl: Element,
+  ): void {
+    this.scopes.push({ name: out.name, path, instanceId: (this.instances += 1), state: new Map() });
+    try {
+      this.complexContent(out, typeNode, doc, path, depth, fixed, decl);
+    } finally {
+      this.scopes.pop();
+    }
+  }
+
+  private complexContent(
     out: InstanceElement,
     typeNode: Element,
     doc: SchemaDocument,
@@ -545,7 +617,12 @@ export class Walker {
       return;
     }
     if (plan.simple) {
-      this.simpleText(out, plan.simple, path, fixed, decl);
+      const named = attr(typeNode, 'name') !== undefined;
+      const chain = plan.simpleTypes ?? [];
+      const names: TypeNames = named
+        ? { typeName: chain[0] ?? '', baseTypeNames: chain.slice(1) }
+        : { baseTypeNames: chain };
+      this.simpleText(out, plan.simple, path, fixed, decl, names);
       out.simpleContent = true;
       return;
     }
@@ -678,14 +755,18 @@ export class Walker {
         : undefined;
     let base = empty;
     let baseFacets: Facets | undefined;
+    let baseTypes: string[] = [];
     if (derivation) {
       const baseName = this.set.resolveQName(derivation, attr(derivation, 'base') ?? '');
       const baseType = baseName.ns === XS ? undefined : this.set.lookup('complexType', baseName);
       if (baseType) {
         base = this.plan(baseType.node, baseType.doc, seen);
         baseFacets = base.simple;
+        baseTypes = base.simpleTypes ?? [];
       } else if (simpleContent) {
         baseFacets = this.facets.read(baseName, derivation);
+        const names = this.simpleTypeNames(baseName);
+        baseTypes = names.typeName === undefined ? names.baseTypeNames : [names.typeName, ...names.baseTypeNames];
       } else if (!(baseName.ns === XS && baseName.local === 'anyType')) {
         this.problems.error(
           'unknown-type',
@@ -700,7 +781,9 @@ export class Walker {
     if (simpleContent && derivation) {
       const facets = baseFacets ?? { builtin: 'string', variety: 'atomic' as const, patterns: [] };
       const simple = derivation.localName === 'restriction' ? this.facets.restrict(facets, derivation) : facets;
-      return { groups: [], attributes, simple, mixed: false };
+      const name = attr(typeNode, 'name');
+      const simpleTypes = name === undefined ? baseTypes : [clark(doc.targetNamespace, name), ...baseTypes];
+      return { groups: [], attributes, simple, simpleTypes, mixed: false };
     }
     const own = xsChildren(owner).find((c) => MODEL_GROUPS.includes(c.localName ?? ''));
     const groups = own ? [{ node: own, doc }] : [];
@@ -780,15 +863,21 @@ export class Walker {
       const name = attr(decl, 'name') ?? '';
       const typeName = attr(decl, 'type');
       const anonymous = xsChild(decl, 'simpleType');
-      const facets = typeName
-        ? this.facets.read(this.set.resolveQName(decl, typeName), decl)
+      const typeQName = typeName === undefined ? undefined : this.set.resolveQName(decl, typeName);
+      const facets = typeQName
+        ? this.facets.read(typeQName, decl)
         : anonymous
           ? this.facets.read(anonymous)
           : this.facets.read({ ns: XS, local: 'anySimpleType' });
+      const names = typeQName
+        ? this.simpleTypeNames(typeQName)
+        : anonymous
+          ? this.simpleTypeNames(anonymous)
+          : NO_TYPE_NAMES;
       const fixed =
         attr(use.node, 'fixed') ?? attr(decl, 'fixed') ?? attr(use.node, 'default') ?? attr(decl, 'default');
       this.identityBoundary(facets);
-      const value = fixed ?? this.value(facets, [...path, name], 'attribute');
+      const value = fixed ?? this.value(facets, [...path, name], 'attribute', names);
       const constrained = attr(use.node, 'fixed') !== undefined || attr(use.node, 'default') !== undefined;
       const scope = fixed === undefined ? (enumerationScope(facets, value) ?? decl) : constrained ? use.node : decl;
       this.bindPrefixes(owner, facets, value, scope, fixed === undefined);
@@ -796,7 +885,7 @@ export class Walker {
       const attribute: InstanceAttribute = { ns, name, value, type: form.type, ...(form.list ? { list: true } : {}) };
       out.push(attribute);
       this.written.push({ facets, holder: attribute });
-      this.identity(facets, [...path, name], 'attribute', fixed !== undefined, {
+      this.identity(facets, [...path, name], 'attribute', names, fixed !== undefined, {
         get: () => attribute.value,
         set: (v) => {
           attribute.value = v;

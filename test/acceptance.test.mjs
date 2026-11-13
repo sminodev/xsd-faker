@@ -6,7 +6,16 @@ import { mkdtempSync, readFileSync, writeFileSync, mkdirSync, rmSync, readdirSyn
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { generateSample, generateSamples, listRoots, toJson, validateXml as validator } from '../dist/index.js';
+import {
+  defineLocale,
+  generateSample,
+  generateSamples,
+  listRoots,
+  localeFromFaker,
+  localeValues,
+  toJson,
+  validateXml as validator,
+} from '../dist/index.js';
 import { generateSampleFile } from '../dist/node.js';
 import { run } from '../dist/cli.js';
 
@@ -47,14 +56,14 @@ test('reproducibility includes XML, JSON and branch trace', async () => {
     ...options,
     seed: 27,
     optional: 'all',
-    profile: 'retail',
+    locale: 'de',
     referenceDate: '2026-01-15T12:00:00Z',
   });
   const b = await generateSampleFile(order, {
     ...options,
     seed: 27,
     optional: 'all',
-    profile: 'retail',
+    locale: 'de',
     referenceDate: '2026-01-15T12:00:00Z',
   });
   okay(a);
@@ -905,7 +914,7 @@ test('node budget fails explicitly', async () => {
 test('fixed, default and enumeration take precedence over unsuitable domain values', async () => {
   const sample = await generated(
     '<xs:element name="Root"><xs:complexType><xs:sequence><xs:element name="Fixed" type="xs:int" fixed="7"/><xs:element name="Default" type="xs:boolean" default="false"/><xs:element name="Currency"><xs:simpleType><xs:restriction base="xs:string"><xs:enumeration value="CHF"/></xs:restriction></xs:simpleType></xs:element></xs:sequence></xs:complexType></xs:element>',
-    { profile: 'retail', samples: { '/Root/Fixed': '99', '/Root/Currency': 'EUR' } },
+    { locale: 'de', samples: { '/Root/Fixed': '99', '/Root/Currency': 'EUR' } },
   );
   okay(sample);
   assert.equal(sample.json.Fixed, 7);
@@ -1426,7 +1435,7 @@ test('invalid candidates retry with an explicit seed sequence', async () => {
   assert.equal(sample.seed, 6);
   assert.equal(sample.attempts, 2);
 });
-test('custom profile values must still meet facets', async () => {
+test('listed values must still meet facets', async () => {
   const sample = await generated(
     '<xs:element name="Code"><xs:simpleType><xs:restriction base="xs:string"><xs:pattern value="[A-Z]{3}"/></xs:restriction></xs:simpleType></xs:element>',
     { samples: { '/Code': ['wrong', 'ABC'] } },
@@ -1481,7 +1490,7 @@ test('CLI writes one pair from the same sample plus a manifest', async () => {
   const c = capture();
   try {
     assert.equal(
-      await run([order, '--format', 'both', '--out-dir', out, '--profile', 'retail', '--seed', '7'], c.io, validator),
+      await run([order, '--format', 'both', '--out-dir', out, '--locale', 'de', '--seed', '7'], c.io, validator),
       0,
       c.result.err,
     );
@@ -1490,7 +1499,7 @@ test('CLI writes one pair from the same sample plus a manifest', async () => {
     assert.equal(manifest.samples[0].status, 'valid');
     assert.equal(manifest.jsonSchemaValidation, 'not-performed');
     assert.equal(manifest.package.version, '0.2.0');
-    assert.equal(manifest.generation.profile, 'retail');
+    assert.equal(manifest.generation.locale, 'de');
     assert.equal(manifest.generation.seed, 7);
     assert.equal(await run([order, '--format', 'both', '--out-dir', out], c.io, validator), 1);
   } finally {
@@ -1537,11 +1546,10 @@ for (const [domain, file] of [
   ['logistics', 'shipment.xsd'],
 ]) {
   for (const seed of [7, 19])
-    test(`synthetic ${domain} profile / seed ${seed}`, async () => {
+    test(`${domain} example with locale de / seed ${seed}`, async () => {
       const sample = await generateSampleFile(join(root, 'examples', domain, file), {
         ...options,
         seed,
-        profile: domain,
         locale: 'de',
         optional: 'all',
         repeat: 2,
@@ -1788,12 +1796,12 @@ test('XML parsing preserves CR in the paired JSON value', async () => {
   okay(sample);
   assert.equal(new DOMParser().parseFromString(sample.xml, 'text/xml').documentElement.textContent, sample.json);
 });
-test('profile enumerations vary with seeded generation', async () => {
+test('enumerations vary with seeded generation under a locale', async () => {
   const batch = await generateSamples(
     input(
       '<xs:element name="Box"><xs:simpleType><xs:restriction base="xs:string"><xs:enumeration value="S"/><xs:enumeration value="M"/><xs:enumeration value="L"/></xs:restriction></xs:simpleType></xs:element>',
     ),
-    { count: 20, profile: 'generic' },
+    { count: 20, locale: 'en' },
   );
   batch.samples.forEach(okay);
   assert.deepEqual(new Set(batch.samples.map((s) => s.json)), new Set(['S', 'M', 'L']));
@@ -1861,10 +1869,10 @@ test('attribute restriction without a compatible type is a schema compile error'
   );
 });
 
-test('profiles do not freeze retries at a date outside unsupported temporal bounds', async () => {
+test('a locale does not freeze retries at a date outside unsupported temporal bounds', async () => {
   const sample = await generated(
     '<xs:element name="D"><xs:simpleType><xs:restriction base="xs:date"><xs:minInclusive value="2027-01-01"/></xs:restriction></xs:simpleType></xs:element>',
-    { profile: 'generic', attempts: 10 },
+    { locale: 'en', attempts: 10 },
   );
   okay(sample);
   assert.ok(sample.json >= '2027-01-01');
@@ -1944,4 +1952,222 @@ test('arrays remain stable across inherited particles', async () => {
     assert.ok(Array.isArray(sample.json.a));
     assert.equal(sample.json.a.length, optionalElements === 'none' ? 1 : 2);
   }
+});
+test('value lists name a type, also one the value type derives from, in the API and the CLI', async () => {
+  const body =
+    '<xs:simpleType name="Code"><xs:restriction base="xs:string"><xs:pattern value="[A-Z][0-9]{2}"/></xs:restriction></xs:simpleType><xs:element name="R"><xs:complexType><xs:sequence><xs:element name="a" type="Code"/><xs:element name="b"><xs:simpleType><xs:restriction base="Code"><xs:pattern value="B.*"/></xs:restriction></xs:simpleType></xs:element><xs:element name="c" type="Code"/></xs:sequence></xs:complexType></xs:element>';
+  const sample = await generated(body, { samples: { Code: ['A10', 'B20'], '/R/c': 'C30' } });
+  okay(sample);
+  assert.match(sample.json.a, /^[AB][12]0$/);
+  assert.equal(sample.json.b, 'B20');
+  assert.equal(sample.json.c, 'C30');
+  const dir = mkdtempSync(join(tmpdir(), 'xsd-values-'));
+  try {
+    writeFileSync(join(dir, 'r.xsd'), schema(body));
+    writeFileSync(join(dir, 'values.json'), JSON.stringify({ Code: 'B20' }));
+    const c = capture();
+    const out = join(dir, 'out.xml');
+    assert.equal(
+      await run([join(dir, 'r.xsd'), '--values', join(dir, 'values.json'), '--out', out], c.io, validator),
+      0,
+    );
+    assert.equal((readFileSync(out, 'utf8').match(/B20/g) ?? []).length, 3);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+test('locale is a known tag, a tag that falls back to one, or a locale object', async () => {
+  const body = '<xs:element name="R" type="xs:string"/>';
+  okay(await generated(body, { locale: 'de-CH' }));
+  await assert.rejects(
+    generated(body, { locale: 'fr' }),
+    (e) => e instanceof TypeError && /unknown locale fr/.test(e.message),
+  );
+  await assert.rejects(generated(body, { locale: 'de', referenceDate: 'soon' }), TypeError);
+  const c = capture();
+  assert.equal(await run([order, '--locale', 'fr'], c.io, validator), 1);
+  assert.match(c.result.err, /unknown locale fr/);
+});
+const personSchema = `<xs:simpleType name="Name_Type"><xs:restriction base="xs:string"><xs:minLength value="1"/><xs:maxLength value="45"/></xs:restriction></xs:simpleType><xs:simpleType name="Datum_Type"><xs:restriction base="xs:string"><xs:pattern value="((19|2[0-9])\\d{2})(0[1-9]|1[012])(0[1-9]|[12][0-9]|3[01])"/></xs:restriction></xs:simpleType><xs:complexType name="Person"><xs:sequence><xs:element name="Krankenversichertennummer"><xs:simpleType><xs:restriction base="xs:string"><xs:pattern value="[A-Z][0-9]{9}"/></xs:restriction></xs:simpleType></xs:element><xs:element name="Vorname" type="Name_Type"/><xs:element name="Nachname" type="Name_Type"/><xs:element name="Geschlecht"><xs:simpleType><xs:restriction base="xs:string"><xs:enumeration value="w"/><xs:enumeration value="m"/><xs:enumeration value="d"/><xs:enumeration value="x"/></xs:restriction></xs:simpleType></xs:element><xs:element name="Geburtsdatum" type="Datum_Type"/><xs:choice><xs:element name="E_Mail" type="Name_Type"/><xs:element name="Telefon" type="Name_Type"/></xs:choice><xs:element name="Anschrift"><xs:complexType><xs:sequence><xs:element name="Strasse" type="Name_Type"/><xs:element name="Hausnummer"><xs:simpleType><xs:restriction base="xs:string"><xs:maxLength value="9"/></xs:restriction></xs:simpleType></xs:element><xs:element name="Postleitzahl"><xs:simpleType><xs:restriction base="xs:string"><xs:maxLength value="10"/></xs:restriction></xs:simpleType></xs:element><xs:element name="Ort" type="Name_Type"/></xs:sequence></xs:complexType></xs:element><xs:element name="Bemerkung" minOccurs="0"><xs:simpleType><xs:restriction base="xs:string"><xs:maxLength value="80"/></xs:restriction></xs:simpleType></xs:element></xs:sequence></xs:complexType><xs:element name="R"><xs:complexType><xs:sequence><xs:element name="Person" type="Person" maxOccurs="3"/></xs:sequence></xs:complexType></xs:element>`;
+const kvnrValid = (kvnr) => {
+  const digits = String(kvnr.charCodeAt(0) - 64).padStart(2, '0') + kvnr.slice(1, 9);
+  const sum = [...digits].reduce((s, d, i) => {
+    const p = Number(d) * (i % 2 === 0 ? 1 : 2);
+    return s + (p > 9 ? p - 9 : p);
+  }, 0);
+  return sum % 10 === Number(kvnr[9]);
+};
+const ascii = (s) =>
+  s
+    .toLowerCase()
+    .replace(/ä/g, 'ae')
+    .replace(/ö/g, 'oe')
+    .replace(/ü/g, 'ue')
+    .replace(/ß/g, 'ss')
+    .normalize('NFD')
+    .replace(/[^a-z0-9]/g, '');
+test('a locale gives each repeated person its own name, address and number, all valid against the schema', async () => {
+  for (const locale of ['de', 'en']) {
+    for (let seed = 1; seed <= 8; seed += 1) {
+      const sample = await generated(personSchema, { locale, seed, repeat: 3, optional: 'all', choice: 'random' });
+      okay(sample);
+      const people = sample.json.Person;
+      assert.equal(people.length, 3);
+      for (const p of people) {
+        assert.ok(kvnrValid(p.Krankenversichertennummer), p.Krankenversichertennummer);
+        assert.match(p.Geburtsdatum, /^(19|20)\d{6}$/);
+        if (p.E_Mail) assert.ok(p.E_Mail.startsWith(`${ascii(p.Vorname)}.`), `${p.E_Mail} ${p.Vorname}`);
+        assert.doesNotMatch(p.Nachname, /^[A-Za-z]{12,}$/);
+      }
+      assert.ok(new Set(people.map((p) => p.Nachname + p.Vorname)).size > 1);
+    }
+  }
+});
+test('the same seed and locale give the same document, and other seeds others', async () => {
+  const a = await generated(personSchema, { locale: 'de', seed: 4 });
+  const b = await generated(personSchema, { locale: 'de', seed: 4 });
+  const c = await generated(personSchema, { locale: 'de', seed: 5 });
+  assert.equal(a.xml, b.xml);
+  assert.notEqual(a.xml, c.xml);
+});
+test('value lists by type come before the locale, and the locale before the facets', async () => {
+  const sample = await generated(personSchema, { locale: 'de', samples: { Name_Type: 'Testname' } });
+  okay(sample);
+  assert.equal(sample.json.Person[0].Nachname, 'Testname');
+  assert.equal(sample.json.Person[0].Anschrift.Strasse, 'Testname');
+  assert.ok(kvnrValid(sample.json.Person[0].Krankenversichertennummer));
+});
+test('a partial locale falls back to the locale it extends', async () => {
+  const deCH = defineLocale('de-CH', {
+    extends: (await import('xsd-faker-locales')).de,
+    address: {
+      places: [{ city: 'Zürich', postcodes: ['8001'], state: 'ZH' }],
+      states: [{ code: 'ZH', name: 'Zürich' }],
+      country: { code: 'CH', name: 'Schweiz' },
+    },
+  });
+  const sample = await generated(personSchema, { locale: deCH, seed: 2 });
+  okay(sample);
+  assert.equal(sample.json.Person[0].Anschrift.Ort, 'Zürich');
+  assert.equal(sample.json.Person[0].Anschrift.Postleitzahl, '8001');
+  const { de } = await import('xsd-faker-locales');
+  assert.ok([...de.person.firstName.female, ...de.person.firstName.male].includes(sample.json.Person[0].Vorname));
+});
+test('a locale made from data in the form of faker-js generates with it', async () => {
+  const locale = localeFromFaker({
+    metadata: { code: 'en_GB', country: 'GB' },
+    person: { first_name: { female: ['Ada'], male: ['Alan'] }, last_name: ['Turing'] },
+    location: { city_name: ['Bletchley'], postcode: 'MK# #AA', street_name: ['Wilton Avenue'] },
+  });
+  const sample = await generated(personSchema, { locale, seed: 3 });
+  okay(sample);
+  const [p] = sample.json.Person;
+  assert.equal(p.Nachname, 'Turing');
+  assert.equal(p.Anschrift.Ort, 'Bletchley');
+  assert.match(p.Anschrift.Postleitzahl, /^MK\d \dAA$/);
+});
+const s = (name, extra = '') =>
+  `<xs:element name="${name}"><xs:simpleType><xs:restriction base="xs:string"><xs:maxLength value="60"/>${extra}</xs:restriction></xs:simpleType></xs:element>`;
+test('a record serves the parent of the element that holds its fields: gender, salutation, e-mail and state fit', async () => {
+  const body = `<xs:element name="Liste"><xs:complexType><xs:sequence><xs:element name="Person" maxOccurs="unbounded"><xs:complexType><xs:sequence>${s('Anrede')}<xs:element name="Name"><xs:complexType><xs:sequence>${s('Vorname')}${s('Nachname')}</xs:sequence></xs:complexType></xs:element><xs:element name="Geschlecht"><xs:simpleType><xs:restriction base="xs:string"><xs:enumeration value="w"/><xs:enumeration value="m"/><xs:enumeration value="d"/></xs:restriction></xs:simpleType></xs:element>${s('Email')}<xs:element name="Anschrift"><xs:complexType><xs:sequence>${s('Strasse')}${s('Postleitzahl')}${s('Ort')}</xs:sequence></xs:complexType></xs:element>${s('Bundesland')}</xs:sequence></xs:complexType></xs:element></xs:sequence></xs:complexType></xs:element>`;
+  const { de } = await import('xsd-faker-locales');
+  const female = new Set(de.person.firstName.female);
+  const male = new Set(de.person.firstName.male);
+  let people = 0;
+  for (let seed = 1; seed <= 30; seed += 1) {
+    const sample = await generated(body, { locale: 'de', seed, repeat: 3 });
+    okay(sample);
+    for (const p of sample.json.Person) {
+      people += 1;
+      if (p.Geschlecht === 'w') assert.ok(female.has(p.Name.Vorname), `${p.Name.Vorname} w`);
+      if (p.Geschlecht === 'm') assert.ok(male.has(p.Name.Vorname), `${p.Name.Vorname} m`);
+      if (p.Anrede === 'Frau') assert.equal(p.Geschlecht === 'm', false);
+      assert.ok(p.Email.startsWith(`${ascii(p.Name.Vorname)}.${ascii(p.Name.Nachname)}`.replace(/ /g, '')), p.Email);
+      const place = de.address.places.find((pl) => pl.city === p.Anschrift.Ort);
+      assert.equal(de.address.states.find((st) => st.code === place?.state)?.name, p.Bundesland);
+    }
+  }
+  assert.ok(people >= 90);
+});
+test('IDs stay unique with a locale given as values, as with the locale option', async () => {
+  const body =
+    '<xs:element name="R"><xs:complexType><xs:sequence><xs:element name="E" maxOccurs="5"><xs:complexType><xs:attribute name="name" type="xs:ID" use="required"/></xs:complexType></xs:element></xs:sequence></xs:complexType></xs:element>';
+  for (let seed = 1; seed <= 10; seed += 1) {
+    okay(await generated(body, { seed, repeat: 5, values: localeValues('de') }));
+    okay(await generated(body, { seed, repeat: 5, locale: 'de' }));
+  }
+});
+test('a locale fills ? in a postcode pattern with a letter and dates that end something lie ahead', async () => {
+  const locale = localeFromFaker({
+    metadata: { code: 'en_GB', country: 'GB' },
+    location: { city_name: ['Bath'], postcode: '??# #??' },
+  });
+  const body = `<xs:element name="R"><xs:complexType><xs:sequence>${s('Postcode')}<xs:element name="GueltigBis" type="xs:date"/><xs:element name="validUntil" type="xs:date"/>${s('Lieferdatum')}</xs:sequence></xs:complexType></xs:element>`;
+  for (let seed = 1; seed <= 10; seed += 1) {
+    const sample = await generated(body, { locale, seed, referenceDate: '2026-01-15' });
+    okay(sample);
+    assert.match(sample.json.Postcode, /^[A-Z]{2}\d [A-Z0-9]{3}$/);
+    assert.doesNotMatch(sample.json.Postcode, /\?/);
+    assert.ok(sample.json.GueltigBis > '2026-01-15' && sample.json.validUntil > '2026-01-15');
+    assert.match(sample.json.Lieferdatum, /^\d{4}-\d\d-\d\d$/);
+  }
+});
+/** The probe below as the library wrote it before it had locales. */
+const EXPECTED_WITHOUT_LOCALE =
+  '<?xml version="1.0" encoding="UTF-8"?>\n<Kunde id="T">\n  <Vorname>Ofcsmu</Vorname>\n  <Nachname>Rnvoawi</Nachname>\n  <Geburtsdatum>2028-10-14</Geburtsdatum>\n  <Bemerkung>Aamwpruppbjnvkmm</Bemerkung>\n</Kunde>\n';
+test('without a locale a fixed probe gives the same document as without locale support', async () => {
+  const body = `<xs:element name="Kunde"><xs:complexType><xs:sequence>${s('Vorname')}${s('Nachname')}<xs:element name="Geburtsdatum" type="xs:date"/>${s('Bemerkung')}</xs:sequence><xs:attribute name="id" type="xs:ID" use="required"/></xs:complexType></xs:element>`;
+  const sample = await generated(body, { seed: 3 });
+  okay(sample);
+  assert.equal(sample.xml, EXPECTED_WITHOUT_LOCALE);
+  const located = await generated(body, { seed: 3, locale: 'de' });
+  assert.notEqual(located.xml, sample.xml);
+});
+test('the CLI names the entry of a value list that is not a string or a non-empty array of strings', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'xsd-values-'));
+  try {
+    writeFileSync(join(dir, 'values.json'), JSON.stringify({ Code: [] }));
+    const c = capture();
+    assert.equal(await run([order, '--values', join(dir, 'values.json')], c.io, validator), 1);
+    assert.match(c.result.err, /values must map Code to a string or a non-empty array of strings/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('the CLI writes a document under a locale for names of Object.prototype', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'xsd-proto-names-'));
+  try {
+    const file = join(dir, 'a.xsd');
+    writeFileSync(
+      file,
+      schema(`<xs:element name="constructor"><xs:complexType><xs:sequence>
+        <xs:element name="toString" type="xs:string"/><xs:element name="__proto__" type="xs:string"/>
+      </xs:sequence><xs:attribute name="constructor" type="xs:string" use="required"/></xs:complexType></xs:element>`),
+    );
+    for (const locale of ['de', 'en']) {
+      const c = capture();
+      assert.equal(await run([file, '--locale', locale], c.io, validator), 0, c.result.err);
+      assert.match(c.result.out, /<constructor constructor="/);
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('the option profile, replaced by locale, is refused with a pointer to locale', async () => {
+  for (const call of [
+    () => generateSample(simple, { ...options, profile: 'retail' }),
+    () => generateSamples(simple, { ...options, count: 2, profile: 'retail' }),
+    () => generateSample(simple, { ...options, profile: undefined }),
+  ]) {
+    await assert.rejects(
+      call,
+      (error) => error instanceof TypeError && /profile was replaced by locale/.test(error.message),
+    );
+  }
+  const c = capture();
+  assert.equal(await run([order, '--profile', 'retail'], c.io, validator), 1);
+  assert.match(c.result.err, /--profile was replaced by --locale/);
+  assert.equal(c.result.out, '');
 });

@@ -88,7 +88,12 @@ function merge(
   const out: Record<string, unknown> = { ...base };
   for (const [key, value] of Object.entries(patch)) {
     if (value === undefined) continue;
-    const current = out[key];
+    // Own keys only: `__proto__` from parsed JSON becomes an own key, which the check then names.
+    const current = Object.hasOwn(out, key) ? out[key] : undefined;
+    if (key === '__proto__') {
+      Object.defineProperty(out, key, { value, enumerable: true, writable: true, configurable: true });
+      continue;
+    }
     if (Array.isArray(value)) {
       out[key] = append && Array.isArray(current) ? [...(current as unknown[]), ...(value as unknown[])] : value;
     } else if (isObject(value) && isObject(current)) {

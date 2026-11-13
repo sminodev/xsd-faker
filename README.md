@@ -25,7 +25,7 @@ To try the examples from a clone of the repository:
 npm ci
 npm run build
 node dist/bin.js examples/retail/order.xsd \
-  --profile retail --optional-elements all --optional-attributes all \
+  --locale en --optional-elements all --optional-attributes all \
   --format both --out-dir samples
 ```
 
@@ -42,7 +42,7 @@ import { generateSampleFile } from 'xsd-faker/node';
 
 const sample = await generateSampleFile('examples/retail/order.xsd', {
   seed: 7,
-  profile: 'retail',
+  locale: 'en',
   optionalElements: 'all',
   optionalAttributes: 'none',
   repeat: 2,
@@ -79,7 +79,7 @@ fixture satisfies business rules outside the XSD.
 npx xsd-faker examples/retail/order.xsd --list-roots
 
 # Generate several separate instances and explore choice branches.
-npx xsd-faker examples/insurance/claim.xsd --profile insurance \
+npx xsd-faker examples/insurance/claim.xsd --locale en \
   --count 6 --coverage --format both --out-dir claim-samples
 
 # Create a developer template containing every choice branch.
@@ -102,29 +102,30 @@ recursion limits, repetitions and validation results.
 
 ## Sample values
 
-Neither the library nor the CLI enables a profile by default. The built-in profiles are `generic`,
-`retail`, `insurance` and `logistics`. They use small, synthetic
-vocabularies rather than customer data. They are examples, not insurance, carrier or healthcare standards.
-`locale: 'de'` selects German labels where available. The default profile reference date is fixed at
-`2026-01-15T12:00:00Z`; generation does not silently depend on today's date.
+By default, values come from the facets alone, such as `Qdnnfugzywaeazi` for a last name. With a locale,
+fields whose names say what they hold get readable values: names, addresses, dates, phone numbers, e-mail
+addresses and free text. `locale: 'de'` and `locale: 'en'` are built in; the
+[locale guide](docs/locales.md) explains which fields are recognized and how to add a locale. Dates count
+from a fixed reference date, `2026-01-15T12:00:00Z` unless `referenceDate` names another, so generation does
+not depend on today's date.
 
-Provide your own value lists for more useful fixtures:
+Provide your own value lists for values a locale does not know, such as codes of your domain. A key is a
+path of local names or the name of a simple type:
 
 ```js
 import { generateSampleFile } from 'xsd-faker/node';
 
 const sample = await generateSampleFile('examples/retail/order.xsd', {
   seed: 7,
-  profile: 'retail',
+  locale: 'en',
   samples: {
     '/Order/Title': ['Integration test order'],
-    '/Order/Contact/Email': ['orders@example.invalid'],
-    '/Order/Line/Price/@currency': ['EUR'],
+    Currency: ['EUR', 'CHF'],
   },
 });
 ```
 
-Values from these lists and profiles must still meet the supported facets. `fixed` and `default` values
+Values from these lists and from a locale must still meet the supported facets. `fixed` and `default` values
 on generated declarations take precedence. For more control, supply a `ValueSource`; see
 [custom values](docs/api.md#custom-values).
 

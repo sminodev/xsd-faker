@@ -1,14 +1,14 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <Claim xmlns="urn:example:insurance" version="1.0">
-  <ClaimNumber>CLM-011705</ClaimNumber>
-  <PolicyNumber>POL-061959</PolicyNumber>
-  <ReportedAt>2026-01-15T12:00:00Z</ReportedAt>
-  <InsuredName>Testperson Beispiel</InsuredName>
-  <Email>sample9769@example.invalid</Email>
+  <ClaimNumber>CLM-654425</ClaimNumber>
+  <PolicyNumber>POL-751325</PolicyNumber>
+  <ReportedAt>2024-08-19T18:14:52</ReportedAt>
+  <InsuredName>Colin Quinlan</InsuredName>
+  <Email>colin.quinlan@example.com</Email>
   <Damage>
-    <Description>Synthetischer Schadenfall</Description>
-    <Amount currency="EUR">4662.3</Amount>
+    <Description>Leave large parcels at the rear loading dock.</Description>
+    <Amount currency="USD">8185.1</Amount>
   </Damage>
-  <Attachment>https://example.org/etnfjh</Attachment>
-  <Attachment>https://example.org/wedeho</Attachment>
+  <Attachment>https://example.org/sotzov</Attachment>
+  <Attachment>https://example.org/oigaay</Attachment>
 </Claim>

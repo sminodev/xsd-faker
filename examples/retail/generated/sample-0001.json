@@ -1,66 +1,66 @@
 {
   "version": "1.0",
-  "created": "2026-01-15T12:00:00Z",
+  "created": "2024-01-24T07:58:41",
   "channel": "web",
-  "Title": "Testbestellung",
-  "CustomerRef": "CUS-061959",
+  "Title": "Duplicate copy issued",
+  "CustomerRef": "Sgetnf",
   "Express": true,
-  "Level": 1,
+  "Level": 2,
   "Pickup": true,
-  "Wanted": "1996-10",
-  "Packages": 37,
+  "Wanted": "2024-07-14",
+  "Packages": 16,
   "Note": {
-    "value": "Gwedehotbx <c:b xmlns:c=\"urn:example:common\">Xvbejla</c:b><c:i xmlns:c=\"urn:example:common\">Ysrij</c:i>"
+    "value": "X <c:b xmlns:c=\"urn:example:common\">Enter the building through the north courtyard gate.</c:b><c:i xmlns:c=\"urn:example:common\">Confirm the delivery address before shipping the order.</c:i>"
   },
-  "DiscountCode": "Qi",
-  "DiscountPercent": 92.2,
+  "DiscountCode": "Lme",
+  "DiscountPercent": 17,
   "Contact": {
-    "Name": "Testperson Beispiel",
-    "Email": "sample5479@example.invalid",
-    "Phone": "Qxyvpz"
+    "Name": "Dunn",
+    "Email": "gary.dunn@example.com",
+    "Phone": "(312) 555-0190"
   },
   "Line": [
     {
-      "Item": "Stifte",
-      "Quantity": 6,
+      "Item": "Billing address confirmed",
+      "Quantity": 406,
       "Price": {
-        "currency": "EUR",
-        "value": 724
+        "currency": "JUS",
+        "value": 529.99
       },
       "Tag": [
-        "Lqtoigaay",
-        "Szhzqu"
+        "Electronic confirmation was sent to the registered address.",
+        "Information in this record has been verified recently."
       ],
       "Packaging": {
-        "Box": "L",
-        "Weight": 506.94
+        "Box": "M",
+        "Weight": 795
       }
     },
     {
-      "Item": "Papier",
-      "Quantity": 211,
+      "Item": "General inquiry note",
+      "Quantity": 58,
       "Price": {
-        "currency": "EUR",
-        "value": 735.92
+        "currency": "CJU",
+        "value": 271.95
       },
       "Tag": [
-        "Mfpuweomne",
-        "E"
+        "Both copies must be signed and returned promptly.",
+        "Client records are updated at the end of month."
       ],
       "Packaging": {
-        "Box": "S",
-        "Weight": 60.13
+        "Box": "L",
+        "Weight": 534.58
       }
     }
   ],
-  "Attachment": "XMq1zIc=",
+  "Attachment": "CrPD",
   "Extensions": {
     "Note": [
       {
-        "value": "Ucgvvu <c:b xmlns:c=\"urn:example:common\">Mvkz</c:b><c:i xmlns:c=\"urn:example:common\">Woz</c:i>"
+        "value": "Nyho <c:b xmlns:c=\"urn:example:common\">Regular service will resume on the following morning.</c:b><c:i xmlns:c=\"urn:example:common\">An updated schedule will be sent next week.</c:i>"
       },
       {
-        "value": "Oreskpwjhc <c:b xmlns:c=\"urn:example:common\">Bsy</c:b><c:i xmlns:c=\"urn:example:common\">Hnkstqsqph</c:i>"
+        "value": "Ihuitbop <c:b xmlns:c=\"urn:example:common\">External visitors must register at the front desk.</c:b><c:i xmlns:c=\"urn:example:common\">Final approval was granted by the review committee.</c:i>"
       }
     ]
   }

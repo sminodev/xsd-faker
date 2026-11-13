@@ -18,7 +18,9 @@ import { toJson, JsonMappingError, type JsonOptions, type JsonValue } from './js
 import { checkOptions } from './options.js';
 import { createRng } from './rng.js';
 import { validateXml, type SchemaFiles, type XmlValidator } from './validate/xmllint.js';
-import { profileValues, valueLists, type ProfileName, type ValueLists } from './values/profiles.js';
+import { listed, valueLists, type ValueLists } from './values/lists.js';
+import { localeValues, type FieldKey } from './values/locale/index.js';
+import type { LocaleData } from 'xsd-faker-locales';
 import { facetValues, firstOf, type ValueSource } from './values/source.js';
 import { serializeXml } from './xml/serialize.js';
 import { elements, type InstanceElement } from './xml/tree.js';
@@ -46,10 +48,25 @@ export type {
 export { firstBranch, randomBranch, smallestBranch, preferBranches } from './generate/walker.js';
 export { toJson, JsonMappingError } from './json/serialize.js';
 export type { JsonOptions, JsonValue } from './json/serialize.js';
-export type { ValueContext, ValueSource } from './values/source.js';
+export type { ValueContext, ValueScope, ValueSource } from './values/source.js';
 export { facetValues, firstOf } from './values/source.js';
-export { profileValues, valueLists, PROFILE_NAMES } from './values/profiles.js';
-export type { ProfileName, ProfileOptions, ValueLists } from './values/profiles.js';
+export { valueLists } from './values/lists.js';
+export type { ValueLists } from './values/lists.js';
+export { FIELD_KEYS, localeValues, LOCALES } from './values/locale/index.js';
+export type { FieldKey, LocaleOptions } from './values/locale/index.js';
+export { defineLocale, extendLocale, localeFromFaker } from 'xsd-faker-locales';
+export type {
+  AddressData,
+  ContactData,
+  Gendered,
+  LocaleData,
+  LocaleInput,
+  PersonData,
+  Place,
+  Region,
+  StreetData,
+  TextData,
+} from 'xsd-faker-locales';
 export type { GroupOccurrence, InstanceElement, InstanceNode } from './xml/tree.js';
 export { serializeXml } from './xml/serialize.js';
 export type { Problem, ProblemCode } from './xsd/problems.js';
@@ -81,10 +98,15 @@ export interface GenerateOptions extends LoadOptions {
   /** Hard limit including required content. Default: 64. Exceeding it is a generation error. */
   maxTotalDepth?: number;
   maxNodes?: number;
+  /** Replaces `locale`; `samples` is still tried first. */
   values?: ValueSource;
-  profile?: ProfileName;
-  locale?: 'en' | 'de';
+  /** Values from a locale, by tag such as `de` or `en`, or a locale from `defineLocale`. Default: none. */
+  locale?: string | LocaleData;
+  /** The day a locale counts dates from. */
   referenceDate?: string;
+  /** The field a locale gives a value for, by path or type name, where the names of the schema do not tell. */
+  localeFields?: Readonly<Record<string, FieldKey | null>>;
+  /** Values by path or type name, tried before every other source. */
   samples?: ValueLists;
   /** Instance mode validates by default. Template mode never claims validity. */
   mode?: 'instance' | 'template';
@@ -276,10 +298,10 @@ function prefixes(set: SchemaSet, configured: GenerateOptions['prefixes']): Map<
 function source(options: GenerateOptions): ValueSource {
   const base =
     options.values ??
-    (options.profile
-      ? profileValues(options.profile, {
-          ...(options.locale !== undefined ? { locale: options.locale } : {}),
+    (options.locale !== undefined
+      ? localeValues(options.locale, {
           ...(options.referenceDate !== undefined ? { referenceDate: options.referenceDate } : {}),
+          ...(options.localeFields !== undefined ? { fields: options.localeFields } : {}),
         })
       : facetValues);
   return options.samples ? firstOf(valueLists(options.samples), base) : base;
@@ -312,12 +334,7 @@ async function generatePrepared(
       maxTotalDepth: options.maxTotalDepth ?? 64,
       maxNodes: options.maxNodes ?? 10000,
       values,
-      userSupplied: (path, kind) => {
-        if (options.values !== undefined) return true;
-        const parts = [...path];
-        if (kind === 'attribute') parts[parts.length - 1] = `@${parts.at(-1) ?? ''}`;
-        return options.samples !== undefined && Object.hasOwn(options.samples, `/${parts.join('/')}`);
-      },
+      userSupplied: (target) => options.samples !== undefined && listed(options.samples, target),
       rng: createRng(seed),
     });
     let tree: InstanceElement;

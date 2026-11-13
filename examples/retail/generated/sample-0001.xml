@@ -1,45 +1,45 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<Order xmlns="urn:example:order" xmlns:c="urn:example:common" version="1.0" created="2026-01-15T12:00:00Z" channel="web">
-  <Title>Testbestellung</Title>
-  <CustomerRef>CUS-061959</CustomerRef>
+<Order xmlns="urn:example:order" xmlns:c="urn:example:common" version="1.0" created="2024-01-24T07:58:41" channel="web">
+  <Title>Duplicate copy issued</Title>
+  <CustomerRef>Sgetnf</CustomerRef>
   <Express>true</Express>
-  <Level>1</Level>
+  <Level>2</Level>
   <Pickup>true</Pickup>
-  <Wanted>1996-10</Wanted>
-  <Packages>37</Packages>
-  <c:Note>Gwedehotbx <c:b>Xvbejla</c:b><c:i>Ysrij</c:i></c:Note>
-  <DiscountCode>Qi</DiscountCode>
-  <DiscountPercent>92.2</DiscountPercent>
+  <Wanted>2024-07-14</Wanted>
+  <Packages>16</Packages>
+  <c:Note>X <c:b>Enter the building through the north courtyard gate.</c:b><c:i>Confirm the delivery address before shipping the order.</c:i></c:Note>
+  <DiscountCode>Lme</DiscountCode>
+  <DiscountPercent>17</DiscountPercent>
   <Contact>
-    <c:Name>Testperson Beispiel</c:Name>
-    <c:Email>sample5479@example.invalid</c:Email>
-    <c:Phone>Qxyvpz</c:Phone>
+    <c:Name>Dunn</c:Name>
+    <c:Email>gary.dunn@example.com</c:Email>
+    <c:Phone>(312) 555-0190</c:Phone>
   </Contact>
   <Line>
-    <Item>Stifte</Item>
-    <Quantity>6</Quantity>
-    <Price currency="EUR">724</Price>
-    <Tag>Lqtoigaay</Tag>
-    <Tag>Szhzqu</Tag>
+    <Item>Billing address confirmed</Item>
+    <Quantity>406</Quantity>
+    <Price currency="JUS">529.99</Price>
+    <Tag>Electronic confirmation was sent to the registered address.</Tag>
+    <Tag>Information in this record has been verified recently.</Tag>
     <Packaging>
-      <Box>L</Box>
-      <Weight>506.94</Weight>
+      <Box>M</Box>
+      <Weight>795</Weight>
     </Packaging>
   </Line>
   <Line>
-    <Item>Papier</Item>
-    <Quantity>211</Quantity>
-    <Price currency="EUR">735.92</Price>
-    <Tag>Mfpuweomne</Tag>
-    <Tag>E</Tag>
+    <Item>General inquiry note</Item>
+    <Quantity>58</Quantity>
+    <Price currency="CJU">271.95</Price>
+    <Tag>Both copies must be signed and returned promptly.</Tag>
+    <Tag>Client records are updated at the end of month.</Tag>
     <Packaging>
-      <Box>S</Box>
-      <Weight>60.13</Weight>
+      <Box>L</Box>
+      <Weight>534.58</Weight>
     </Packaging>
   </Line>
-  <Attachment>XMq1zIc=</Attachment>
+  <Attachment>CrPD</Attachment>
   <Extensions>
-    <c:Note>Ucgvvu <c:b>Mvkz</c:b><c:i>Woz</c:i></c:Note>
-    <c:Note>Oreskpwjhc <c:b>Bsy</c:b><c:i>Hnkstqsqph</c:i></c:Note>
+    <c:Note>Nyho <c:b>Regular service will resume on the following morning.</c:b><c:i>An updated schedule will be sent next week.</c:i></c:Note>
+    <c:Note>Ihuitbop <c:b>External visitors must register at the front desk.</c:b><c:i>Final approval was granted by the review committee.</c:i></c:Note>
   </Extensions>
 </Order>

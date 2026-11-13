@@ -1,67 +1,67 @@
 {
   "version": "1.0",
-  "created": "2026-01-15T12:00:00Z",
+  "created": "2024-05-09T14:18:41",
   "channel": "web",
-  "Title": "Testbestellung",
-  "CustomerRef": "CUS-625192",
-  "Express": false,
-  "Level": 1,
-  "DeliveryDate": "2026-01-15",
-  "DeliveryTime": "12:00:00Z",
-  "Wanted": "1993-07-07",
-  "Packages": 95,
+  "Title": "Enclosed for reference",
+  "CustomerRef": "Bnbofe",
+  "Express": true,
+  "Level": 0,
+  "DeliveryDate": "2025-02-25",
+  "DeliveryTime": "12:19:31",
+  "Wanted": "2024-04-16",
+  "Packages": 90,
   "Note": {
-    "value": "O <c:b xmlns:c=\"urn:example:common\">Jnind</c:b><c:i xmlns:c=\"urn:example:common\">Rtqihc</c:i>"
+    "value": "Ihcizok <c:b xmlns:c=\"urn:example:common\">Provide a valid reference number with every inquiry.</c:b><c:i xmlns:c=\"urn:example:common\">Forward any remaining questions to the support team.</c:i>"
   },
-  "DiscountCode": "L",
-  "DiscountPercent": 25,
+  "DiscountCode": "Nufiygx",
+  "DiscountPercent": 21,
   "Contact": {
-    "Name": "Testperson Beispiel",
-    "Email": "sample8605@example.invalid",
-    "Phone": "Cczve"
+    "Name": "White",
+    "Email": "nathan.white@example.net",
+    "Phone": "+1-310-555-0128"
   },
   "Line": [
     {
-      "Item": "Ordner",
-      "Quantity": 796,
+      "Item": "Active account status",
+      "Quantity": 13,
       "Price": {
-        "currency": "EUR",
-        "value": 30.7
+        "currency": "XAG",
+        "value": 288
       },
       "Tag": [
-        "Jgzxvpry",
-        "Xioh"
+        "Office supplies are stored in the hallway cabinet.",
+        "General maintenance takes place on the first Tuesday."
       ],
       "Packaging": {
         "Box": "M",
-        "Weight": 518.64
+        "Weight": 714.1
       }
     },
     {
-      "Item": "Ordner",
-      "Quantity": 267,
+      "Item": "Electronic notice sent",
+      "Quantity": 172,
       "Price": {
-        "currency": "EUR",
-        "value": 91
+        "currency": "BYB",
+        "value": 476.43
       },
       "Tag": [
-        "Jrdegt",
-        "Ggngcmf"
+        "Monthly statements are generated on the first day.",
+        "Please verify the contact details on the form."
       ],
       "Packaging": {
-        "Box": "S",
-        "Weight": 70.77
+        "Box": "M",
+        "Weight": 327
       }
     }
   ],
-  "Attachment": "Qh6yieosTdg=",
+  "Attachment": "jvRMgAf0",
   "Extensions": {
     "Note": [
       {
-        "value": "Qnu <c:b xmlns:c=\"urn:example:common\">Efblghwaap</c:b><c:i xmlns:c=\"urn:example:common\">Hhq</c:i>"
+        "value": "T <c:b xmlns:c=\"urn:example:common\">Contact the main office during regular business hours.</c:b><c:i xmlns:c=\"urn:example:common\">Final approval was granted by the review committee.</c:i>"
       },
       {
-        "value": "Akioqqxp <c:b xmlns:c=\"urn:example:common\">Hp</c:b><c:i xmlns:c=\"urn:example:common\">Jqeu</c:i>"
+        "value": "Xrwjs <c:b xmlns:c=\"urn:example:common\">The main entrance closes at six every evening.</c:b><c:i xmlns:c=\"urn:example:common\">Further instructions are included in the attached guide.</c:i>"
       }
     ]
   }

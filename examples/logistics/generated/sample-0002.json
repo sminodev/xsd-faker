@@ -1,24 +1,24 @@
 {
   "version": "1.0",
-  "ShipmentNumber": "SHP-156296",
-  "Carrier": "Example Logistics",
+  "ShipmentNumber": "SHP-654825",
+  "Carrier": "Client records are updated at the end of month.",
   "Recipient": {
-    "Name": "Testperson Beispiel",
-    "Street": "Beispielweg 1",
-    "PostalCode": "12345",
-    "City": "Musterstadt",
-    "Country": "DE"
+    "Name": "Bishop",
+    "Street": "Linden Place",
+    "PostalCode": "25302",
+    "City": "Charleston",
+    "Country": "US"
   },
   "Air": true,
   "Package": [
     {
       "unit": "kg",
-      "Weight": 35
+      "Weight": 2
     },
     {
       "unit": "kg",
-      "Weight": 41
+      "Weight": 30.33
     }
   ],
-  "DeliveryDate": "2026-01-15"
+  "DeliveryDate": "2025-08-18"
 }

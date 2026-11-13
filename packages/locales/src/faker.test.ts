@@ -94,6 +94,15 @@ describe('localeFromFaker', () => {
     expect(japanese.person.lastName).toEqual(['Sato']);
   });
 
+  it('refuses a country for a definition without cities, whose addresses come from the base locale', () => {
+    const noCities: FakerLocaleDefinition = { metadata: { code: 'ja' }, location: { street_name: ['Sakura Dori'] } };
+    for (const country of ['JP', { code: 'JP', name: 'Japan' }]) {
+      expect(() => localeFromFaker(noCities, { base: en, country })).toThrow(TypeError);
+      expect(() => localeFromFaker(noCities, { base: en, country })).toThrow(/has none/);
+    }
+    expect(localeFromFaker(noCities, { base: en }).address.country).toEqual(en.address.country);
+  });
+
   it('leaves the country of faker-js cities open unless the metadata or the country option names it', () => {
     const french = { metadata: { code: 'fr' }, location: { city_name: ['Lyon'], postcode: '#####' } };
     expect(localeFromFaker(french).address.country).toBeUndefined();

@@ -74,11 +74,11 @@ refers to it, and a member is chosen.
 | `mode`                           | `instance`               | `instance` or `template`; `choice: 'all'` needs template mode                                                                                                                                                                          |
 | `validate`                       | `true`                   | XML validation; template mode always remains unvalidated                                                                                                                                                                               |
 | `validator`                      | libxml2/WASM             | Explicit alternative XML validator callback                                                                                                                                                                                            |
-| `values`                         | facet generator          | Custom value source                                                                                                                                                                                                                    |
-| `profile`                        | none                     | `generic`, `retail`, `insurance`, `logistics`                                                                                                                                                                                          |
-| `locale`                         | `en`                     | Profile vocabulary; also accepts `de`                                                                                                                                                                                                  |
-| `referenceDate`                  | fixed profile date       | Date used by a selected profile                                                                                                                                                                                                        |
-| `samples`                        | none                     | Value lists keyed by local-name paths                                                                                                                                                                                                  |
+| `values`                         | facet generator          | Custom value source; replaces `locale`                                                                                                                                                                                                 |
+| `locale`                         | none                     | Locale values: a tag such as `de` or `en`, or a locale from `defineLocale`; see [Locales](locales.md)                                                                                                                                  |
+| `referenceDate`                  | `2026-01-15T12:00:00Z`   | The day a locale counts dates from                                                                                                                                                                                                     |
+| `localeFields`                   | none                     | The field a locale fills, by path or type name; `null` leaves a value to the facets; see [Locales](locales.md#fields)                                                                                                                  |
+| `samples`                        | none                     | Value lists keyed by local-name paths or type names; tried before every other source                                                                                                                                                   |
 | `json`                           | compact projection       | `false` disables JSON; otherwise `JsonOptions`                                                                                                                                                                                         |
 | `indent`                         | two spaces               | XML indentation, up to eight spaces/tabs                                                                                                                                                                                               |
 | `schemaLocation`                 | none                     | Root schema-assignment hint                                                                                                                                                                                                            |
@@ -126,8 +126,10 @@ The CLI uses the same generation defaults. Its differently named flags map as fo
 | `--max-file-bytes`, `--max-total-bytes`, `--max-documents` | `limits.maxFileBytes`, `limits.maxTotalBytes`, `limits.maxDocuments` |
 | `--schema-location none\|relative\|absolute`               | `schemaLocation` (resolved path, or omitted for `none`)              |
 
-`values` replaces the selected `profile`; `samples` is tried before that source. To compose more
-sources, use `firstOf`. `locale` and `referenceDate` only affect a selected profile. `coverage: true`
+The manifest records the generation options as given; `locale` appears in it only when `--locale` is set.
+
+`values` replaces the locale; `samples` is tried before either source. To compose more sources, use
+`firstOf`. `referenceDate` only affects a locale. `coverage: true`
 uses its own choice strategy and overrides `choice`. CLI JSON settings have no effect with `--format xml`.
 
 ## Errors
@@ -204,13 +206,12 @@ package version and deterministic callbacks, not only the seed.
 ## Custom values
 
 ```js
-import { firstOf, valueLists, profileValues, facetValues } from 'xsd-faker';
+import { firstOf, valueLists, localeValues } from 'xsd-faker';
 import { generateSampleFile } from 'xsd-faker/node';
 
 const source = firstOf(
   valueLists({ '/Order/Contact/Email': ['orders@example.invalid'] }),
-  profileValues('retail', { locale: 'de', referenceDate: '2026-01-15T12:00:00Z' }),
-  facetValues,
+  localeValues('de', { referenceDate: '2026-01-15T12:00:00Z' }),
 );
 const sample = await generateSampleFile('examples/retail/order.xsd', { values: source, seed: 7 });
 ```
@@ -220,9 +221,29 @@ const sample = await generateSampleFile('examples/retail/order.xsd', { values: s
 correct. Failed candidates can consume a later seed. Do not use nondeterministic callbacks when fixtures
 must be reproducible. `fixed` and `default` values on generated declarations bypass the source.
 
-Value-list paths are local-name paths, not XPath. `/Order/@version` identifies an attribute.
-When namespaces make such a path ambiguous, use a custom strategy and inspect the schema context or keep
-separate runs. The current value context does not expose a namespace-qualified path.
+`localeValues(locale, { referenceDate, fields })` falls back to facet values itself, so it can end a `firstOf`
+chain. `defineLocale`, `extendLocale`, `localeFromFaker` and the locale types are exported by `xsd-faker` as well as
+`xsd-faker-locales`; `FIELD_KEYS` lists the fields.
+
+A value-list key that starts with `/` is a local-name path, not XPath; `/Order/@version` identifies an
+attribute. `{namespace}local` names a simple type with its namespace, and any other key names a type by its
+local name. A value is looked up under its path, then its own type, then each type it derives from, nearest
+first; a key whose values all fail the facets passes on to the next one. A type key covers every place the
+type is used, also through an anonymous restriction of it:
+
+```js
+const sample = await generateSampleFile('claim.xsd', {
+  samples: { DiagnosisCode: ['J06.9', 'M54.5', 'R51'], '/Claim/@status': 'open' },
+});
+```
+
+A `ValueSource` receives a `ValueContext`: the `facets`, the local `name`, the `path` of local names, the
+`kind` (`element` or `attribute`) and the seeded `rng`. `typeName` is the expanded name `{namespace}local`
+of a named type, absent for an anonymous or built-in one, and `baseTypeNames` lists the named types it
+derives from, nearest first. `scopes` lists the elements of complex type around the value, outermost first,
+each with its `name`, `path`, an `instanceId` that is new for every occurrence, and a `state` map where a
+source can keep what belongs to that occurrence, such as one person for all name fields of a `Person`
+element. For an attribute and for simple content, the element that holds the value comes last.
 
 ## Batch and branch coverage
 

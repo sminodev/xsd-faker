@@ -1,46 +1,46 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<Order xmlns="urn:example:order" xmlns:c="urn:example:common" version="1.0" created="2026-01-15T12:00:00Z" channel="web">
-  <Title>Testbestellung</Title>
-  <CustomerRef>CUS-625192</CustomerRef>
-  <Express>false</Express>
-  <Level>1</Level>
-  <DeliveryDate>2026-01-15</DeliveryDate>
-  <DeliveryTime>12:00:00Z</DeliveryTime>
-  <Wanted>1993-07-07</Wanted>
-  <Packages>95</Packages>
-  <c:Note>O <c:b>Jnind</c:b><c:i>Rtqihc</c:i></c:Note>
-  <DiscountCode>L</DiscountCode>
-  <DiscountPercent>25.0</DiscountPercent>
+<Order xmlns="urn:example:order" xmlns:c="urn:example:common" version="1.0" created="2024-05-09T14:18:41" channel="web">
+  <Title>Enclosed for reference</Title>
+  <CustomerRef>Bnbofe</CustomerRef>
+  <Express>true</Express>
+  <Level>0</Level>
+  <DeliveryDate>2025-02-25</DeliveryDate>
+  <DeliveryTime>12:19:31</DeliveryTime>
+  <Wanted>2024-04-16</Wanted>
+  <Packages>90</Packages>
+  <c:Note>Ihcizok <c:b>Provide a valid reference number with every inquiry.</c:b><c:i>Forward any remaining questions to the support team.</c:i></c:Note>
+  <DiscountCode>Nufiygx</DiscountCode>
+  <DiscountPercent>21</DiscountPercent>
   <Contact>
-    <c:Name>Testperson Beispiel</c:Name>
-    <c:Email>sample8605@example.invalid</c:Email>
-    <c:Phone>Cczve</c:Phone>
+    <c:Name>White</c:Name>
+    <c:Email>nathan.white@example.net</c:Email>
+    <c:Phone>+1-310-555-0128</c:Phone>
   </Contact>
   <Line>
-    <Item>Ordner</Item>
-    <Quantity>796</Quantity>
-    <Price currency="EUR">30.7</Price>
-    <Tag>Jgzxvpry</Tag>
-    <Tag>Xioh</Tag>
+    <Item>Active account status</Item>
+    <Quantity>13</Quantity>
+    <Price currency="XAG">288</Price>
+    <Tag>Office supplies are stored in the hallway cabinet.</Tag>
+    <Tag>General maintenance takes place on the first Tuesday.</Tag>
     <Packaging>
       <Box>M</Box>
-      <Weight>518.64</Weight>
+      <Weight>714.1</Weight>
     </Packaging>
   </Line>
   <Line>
-    <Item>Ordner</Item>
-    <Quantity>267</Quantity>
-    <Price currency="EUR">91</Price>
-    <Tag>Jrdegt</Tag>
-    <Tag>Ggngcmf</Tag>
+    <Item>Electronic notice sent</Item>
+    <Quantity>172</Quantity>
+    <Price currency="BYB">476.43</Price>
+    <Tag>Monthly statements are generated on the first day.</Tag>
+    <Tag>Please verify the contact details on the form.</Tag>
     <Packaging>
-      <Box>S</Box>
-      <Weight>70.77</Weight>
+      <Box>M</Box>
+      <Weight>327.0</Weight>
     </Packaging>
   </Line>
-  <Attachment>Qh6yieosTdg=</Attachment>
+  <Attachment>jvRMgAf0</Attachment>
   <Extensions>
-    <c:Note>Qnu <c:b>Efblghwaap</c:b><c:i>Hhq</c:i></c:Note>
-    <c:Note>Akioqqxp <c:b>Hp</c:b><c:i>Jqeu</c:i></c:Note>
+    <c:Note>T <c:b>Contact the main office during regular business hours.</c:b><c:i>Final approval was granted by the review committee.</c:i></c:Note>
+    <c:Note>Xrwjs <c:b>The main entrance closes at six every evening.</c:b><c:i>Further instructions are included in the attached guide.</c:i></c:Note>
   </Extensions>
 </Order>

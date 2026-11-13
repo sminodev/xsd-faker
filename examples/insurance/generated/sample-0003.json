@@ -1,19 +1,19 @@
 {
   "version": "1.0",
-  "ClaimNumber": "CLM-198729",
-  "PolicyNumber": "POL-851210",
-  "ReportedAt": "2026-01-15T12:00:00Z",
-  "InsuredName": "Testperson Beispiel",
-  "Email": "sample1418@example.invalid",
+  "ClaimNumber": "CLM-876291",
+  "PolicyNumber": "POL-292763",
+  "ReportedAt": "2025-02-10T17:51:27",
+  "InsuredName": "Marcus Ives",
+  "Email": "marcus.ives@example.org",
   "Damage": {
-    "Description": "Synthetischer Schadenfall",
+    "Description": "Leave large parcels at the rear loading dock.",
     "Amount": {
-      "currency": "EUR",
-      "value": 2627.19
+      "currency": "USD",
+      "value": 7931.74
     }
   },
   "Attachment": [
-    "https://example.org/phyhsq",
-    "https://example.org/lwerib"
+    "https://example.org/swbpoi",
+    "https://example.org/evsoyv"
   ]
 }

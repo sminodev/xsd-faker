@@ -1,66 +1,66 @@
 {
   "version": "1.0",
-  "created": "2026-01-15T12:00:00Z",
+  "created": "2024-06-09T17:08:49",
   "channel": "web",
-  "Title": "Testbestellung",
-  "CustomerRef": "CUS-851210",
+  "Title": "Ground floor rear",
+  "CustomerRef": "Qs",
   "Express": true,
-  "Level": 0,
+  "Level": 2,
   "Pickup": true,
-  "Wanted": "2014-04-29",
-  "Packages": 73,
+  "Wanted": "2025-04-29",
+  "Packages": 86,
   "Note": {
-    "value": "Wlweribwf <c:b xmlns:c=\"urn:example:common\">Fbmirhoy</c:b><c:i xmlns:c=\"urn:example:common\">Uppnrm</c:i>"
+    "value": "Ibwfnmb <c:b xmlns:c=\"urn:example:common\">Monthly statements are generated on the first day.</c:b><c:i xmlns:c=\"urn:example:common\">Delivery is scheduled for the next business day.</c:i>"
   },
-  "DiscountCode": "Rzxatc",
-  "DiscountPercent": 97.5,
+  "DiscountCode": "A",
+  "DiscountPercent": 87.7,
   "Contact": {
-    "Name": "Testperson Beispiel",
-    "Email": "sample7345@example.invalid",
-    "Phone": "Dyruitiswb"
+    "Name": "Page",
+    "Email": "margaret.page@corp.example",
+    "Phone": "(312) 555-0178"
   },
   "Line": [
     {
-      "Item": "Stifte",
-      "Quantity": 535,
+      "Item": "Contact main reception",
+      "Quantity": 466,
       "Price": {
-        "currency": "EUR",
-        "value": 186.1
+        "currency": "ONX",
+        "value": 510
       },
       "Tag": [
-        "Afprfgxqa",
-        "Eh"
-      ],
-      "Packaging": {
-        "Box": "S",
-        "Weight": 832.51
-      }
-    },
-    {
-      "Item": "Ordner",
-      "Quantity": 955,
-      "Price": {
-        "currency": "EUR",
-        "value": 252.8
-      },
-      "Tag": [
-        "Xlkv",
-        "Y"
+        "Records are retained for the standard retention period.",
+        "Initial processing usually takes two to three days."
       ],
       "Packaging": {
         "Box": "L",
-        "Weight": 778.9
+        "Weight": 358.94
+      }
+    },
+    {
+      "Item": "Initial review completed",
+      "Quantity": 484,
+      "Price": {
+        "currency": "GTW",
+        "value": 765.6
+      },
+      "Tag": [
+        "Check the reference number on the top right.",
+        "Every file is reviewed for accuracy and completeness."
+      ],
+      "Packaging": {
+        "Box": "S",
+        "Weight": 593.77
       }
     }
   ],
-  "Attachment": "ZY8=",
+  "Attachment": "4NFu",
   "Extensions": {
     "Note": [
       {
-        "value": "Sk <c:b xmlns:c=\"urn:example:common\">Ixcosad</c:b><c:i xmlns:c=\"urn:example:common\">Mg</c:i>"
+        "value": "Khyeyynyrz <c:b xmlns:c=\"urn:example:common\">Previous versions of the document are archived securely.</c:b><c:i xmlns:c=\"urn:example:common\">Provide a valid reference number with every inquiry.</c:i>"
       },
       {
-        "value": "Dcfqspk <c:b xmlns:c=\"urn:example:common\">Whtbpeqhtm</c:b><c:i xmlns:c=\"urn:example:common\">Yvz</c:i>"
+        "value": "Wbdej <c:b xmlns:c=\"urn:example:common\">Mail is sorted twice daily in the mailroom.</c:b><c:i xmlns:c=\"urn:example:common\">The main entrance closes at six every evening.</c:i>"
       }
     ]
   }

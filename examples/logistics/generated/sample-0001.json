@@ -1,24 +1,24 @@
 {
   "version": "1.0",
-  "ShipmentNumber": "SHP-011705",
-  "Carrier": "Example Logistics",
+  "ShipmentNumber": "SHP-654425",
+  "Carrier": "Delivery is scheduled for the next business day.",
   "Recipient": {
-    "Name": "Testperson Beispiel",
-    "Street": "Beispielweg 1",
-    "PostalCode": "12345",
-    "City": "Musterstadt",
-    "Country": "DE"
+    "Name": "Roberts",
+    "Street": "Hillcrest Drive",
+    "PostalCode": "83702",
+    "City": "Boise",
+    "Country": "US"
   },
   "Road": true,
   "Package": [
     {
       "unit": "kg",
-      "Weight": 34.96
+      "Weight": 27.4
     },
     {
       "unit": "kg",
-      "Weight": 23.4
+      "Weight": 32.77
     }
   ],
-  "DeliveryDate": "2026-01-15"
+  "DeliveryDate": "2025-11-18"
 }

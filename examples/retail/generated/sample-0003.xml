@@ -1,45 +1,45 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<Order xmlns="urn:example:order" xmlns:c="urn:example:common" version="1.0" created="2026-01-15T12:00:00Z" channel="web">
-  <Title>Testbestellung</Title>
-  <CustomerRef>CUS-851210</CustomerRef>
+<Order xmlns="urn:example:order" xmlns:c="urn:example:common" version="1.0" created="2024-06-09T17:08:49" channel="web">
+  <Title>Ground floor rear</Title>
+  <CustomerRef>Qs</CustomerRef>
   <Express>true</Express>
-  <Level>0</Level>
+  <Level>2</Level>
   <Pickup>true</Pickup>
-  <Wanted>2014-04-29</Wanted>
-  <Packages>73</Packages>
-  <c:Note>Wlweribwf <c:b>Fbmirhoy</c:b><c:i>Uppnrm</c:i></c:Note>
-  <DiscountCode>Rzxatc</DiscountCode>
-  <DiscountPercent>97.5</DiscountPercent>
+  <Wanted>2025-04-29</Wanted>
+  <Packages>86</Packages>
+  <c:Note>Ibwfnmb <c:b>Monthly statements are generated on the first day.</c:b><c:i>Delivery is scheduled for the next business day.</c:i></c:Note>
+  <DiscountCode>A</DiscountCode>
+  <DiscountPercent>87.7</DiscountPercent>
   <Contact>
-    <c:Name>Testperson Beispiel</c:Name>
-    <c:Email>sample7345@example.invalid</c:Email>
-    <c:Phone>Dyruitiswb</c:Phone>
+    <c:Name>Page</c:Name>
+    <c:Email>margaret.page@corp.example</c:Email>
+    <c:Phone>(312) 555-0178</c:Phone>
   </Contact>
   <Line>
-    <Item>Stifte</Item>
-    <Quantity>535</Quantity>
-    <Price currency="EUR">186.1</Price>
-    <Tag>Afprfgxqa</Tag>
-    <Tag>Eh</Tag>
+    <Item>Contact main reception</Item>
+    <Quantity>466</Quantity>
+    <Price currency="ONX">510</Price>
+    <Tag>Records are retained for the standard retention period.</Tag>
+    <Tag>Initial processing usually takes two to three days.</Tag>
     <Packaging>
-      <Box>S</Box>
-      <Weight>832.51</Weight>
+      <Box>L</Box>
+      <Weight>358.94</Weight>
     </Packaging>
   </Line>
   <Line>
-    <Item>Ordner</Item>
-    <Quantity>955</Quantity>
-    <Price currency="EUR">252.8</Price>
-    <Tag>Xlkv</Tag>
-    <Tag>Y</Tag>
+    <Item>Initial review completed</Item>
+    <Quantity>484</Quantity>
+    <Price currency="GTW">765.6</Price>
+    <Tag>Check the reference number on the top right.</Tag>
+    <Tag>Every file is reviewed for accuracy and completeness.</Tag>
     <Packaging>
-      <Box>L</Box>
-      <Weight>778.90</Weight>
+      <Box>S</Box>
+      <Weight>593.77</Weight>
     </Packaging>
   </Line>
-  <Attachment>ZY8=</Attachment>
+  <Attachment>4NFu</Attachment>
   <Extensions>
-    <c:Note>Sk <c:b>Ixcosad</c:b><c:i>Mg</c:i></c:Note>
-    <c:Note>Dcfqspk <c:b>Whtbpeqhtm</c:b><c:i>Yvz</c:i></c:Note>
+    <c:Note>Khyeyynyrz <c:b>Previous versions of the document are archived securely.</c:b><c:i>Provide a valid reference number with every inquiry.</c:i></c:Note>
+    <c:Note>Wbdej <c:b>Mail is sorted twice daily in the mailroom.</c:b><c:i>The main entrance closes at six every evening.</c:i></c:Note>
   </Extensions>
 </Order>

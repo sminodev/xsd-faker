@@ -2,16 +2,7 @@ import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, relative, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { generateSampleFiles, listRootsFile } from './node.js';
-import type {
-  BatchOptions,
-  NilMode,
-  OptionalMode,
-  ProfileName,
-  Sample,
-  SchemaLimits,
-  ValueLists,
-  XmlValidator,
-} from './index.js';
+import type { BatchOptions, NilMode, OptionalMode, Sample, SchemaLimits, ValueLists, XmlValidator } from './index.js';
 export interface CliOutput {
   stdout(text: string): void;
   stderr(text: string): void;
@@ -40,10 +31,9 @@ Generate XML and JSON fixtures from XML Schema 1.0. No network access.
   --repeat <number>               Requested occurrences, clamped to XSD bounds (1)
   --choice <strategy>             first, smallest, random, all (default: first)
   --coverage                     Prefer unexplored choice branches; bounded by count
-  --profile <name>                generic, retail, insurance, logistics (default: none)
-  --locale <en|de>                Locale for synthetic profile vocabulary (en)
-  --date <ISO date>               Profile reference date (2026-01-15T12:00:00Z)
-  --values <file.json>            Value lists keyed by /Root/Element or /Root/@attr
+  --locale <tag>                  Locale values: de or en (default: none)
+  --date <ISO date>               Locale reference date (2026-01-15T12:00:00Z)
+  --values <file.json>            Value lists keyed by /Root/Element, /Root/@attr or type name
   --json-mode <compact|tree>      Local-name objects (default) or ordered tree
   --json-numbers <number|string>  Default: number; unsafe conversions are refused
   --text-property <name>          Simple/mixed content property (value)
@@ -83,17 +73,17 @@ function enumeration<T extends string>(name: string, value: string | undefined, 
 function readValues(file: string): ValueLists {
   const value: unknown = JSON.parse(readFileSync(file, 'utf8'));
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    throw new TypeError('values must be an object of absolute local-name paths and strings or string arrays');
+    throw new TypeError('values must map paths or type names to a string or a non-empty array of strings');
   }
   for (const [key, item] of Object.entries(value)) {
     if (
-      !key.startsWith('/') ||
+      key === '' ||
       !(
         typeof item === 'string' ||
         (Array.isArray(item) && item.length > 0 && item.every((v: unknown) => typeof v === 'string'))
       )
     ) {
-      throw new TypeError(`invalid value list: ${key}`);
+      throw new TypeError(`values must map ${key} to a string or a non-empty array of strings`);
     }
   }
   return value as ValueLists;
@@ -107,6 +97,10 @@ export async function run(
   io: CliOutput = { stdout: (s) => process.stdout.write(s), stderr: (s) => process.stderr.write(s) },
   validator?: XmlValidator,
 ): Promise<number> {
+  if (argv.some((arg) => arg === '--profile' || arg.startsWith('--profile='))) {
+    io.stderr('--profile was replaced by --locale: use --locale en or --locale de for readable values\n');
+    return 1;
+  }
   try {
     const { values: flags, positionals } = parseArgs({
       args: argv,
@@ -130,7 +124,6 @@ export async function run(
         'max-nodes': { type: 'string' },
         choice: { type: 'string' },
         coverage: { type: 'boolean' },
-        profile: { type: 'string' },
         locale: { type: 'string' },
         date: { type: 'string' },
         values: { type: 'string' },
@@ -220,17 +213,7 @@ export async function run(
         ['first', 'smallest', 'random', 'all'],
         'first',
       ),
-      ...(flags.profile !== undefined
-        ? {
-            profile: enumeration<ProfileName>(
-              'profile',
-              flags.profile,
-              ['generic', 'retail', 'insurance', 'logistics'],
-              'generic',
-            ),
-          }
-        : {}),
-      locale: enumeration('locale', flags.locale, ['en', 'de'], 'en'),
+      ...(flags.locale !== undefined ? { locale: flags.locale } : {}),
       coverage: flags.coverage ?? false,
       validate: !(flags['no-validate'] ?? false),
       fillElements: !(flags['no-element-values'] ?? false),

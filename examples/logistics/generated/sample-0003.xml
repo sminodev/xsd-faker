@@ -1,20 +1,20 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <Shipment xmlns="urn:example:logistics" version="1.0">
-  <ShipmentNumber>SHP-198729</ShipmentNumber>
-  <Carrier>Example Logistics</Carrier>
+  <ShipmentNumber>SHP-876291</ShipmentNumber>
+  <Carrier>All required documents have been submitted on time.</Carrier>
   <Recipient>
-    <Name>Testperson Beispiel</Name>
-    <Street>Beispielweg 1</Street>
-    <PostalCode>12345</PostalCode>
-    <City>Musterstadt</City>
-    <Country>DE</Country>
+    <Name>Roberts</Name>
+    <Street>Arbor Alley</Street>
+    <PostalCode>84101</PostalCode>
+    <City>Salt Lake City</City>
+    <Country>US</Country>
   </Recipient>
   <Road>true</Road>
   <Package unit="kg">
-    <Weight>42</Weight>
+    <Weight>37</Weight>
   </Package>
   <Package unit="kg">
-    <Weight>13.14</Weight>
+    <Weight>34</Weight>
   </Package>
-  <DeliveryDate>2026-01-15</DeliveryDate>
+  <DeliveryDate>2025-04-27</DeliveryDate>
 </Shipment>

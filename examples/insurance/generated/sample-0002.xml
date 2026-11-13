@@ -1,11 +1,11 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <Claim xmlns="urn:example:insurance" version="1.0">
-  <ClaimNumber>CLM-156296</ClaimNumber>
-  <PolicyNumber>POL-625192</PolicyNumber>
-  <ReportedAt>2026-01-15T12:00:00Z</ReportedAt>
-  <InsuredName>Testperson Beispiel</InsuredName>
-  <Email>sample3007@example.invalid</Email>
-  <Assistance>replacement</Assistance>
-  <Attachment>https://example.org/bnbofe</Attachment>
-  <Attachment>https://example.org/boltub</Attachment>
+  <ClaimNumber>CLM-654825</ClaimNumber>
+  <PolicyNumber>POL-521960</PolicyNumber>
+  <ReportedAt>2024-04-18T07:33:26</ReportedAt>
+  <InsuredName>Walter Wheeler</InsuredName>
+  <Email>walter.wheeler@corp.example</Email>
+  <Assistance>repair</Assistance>
+  <Attachment>https://example.org/indwit</Attachment>
+  <Attachment>https://example.org/tqihci</Attachment>
 </Claim>
