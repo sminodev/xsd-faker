@@ -79,12 +79,15 @@ npm run verify
 npm run format:check
 npm pack --dry-run
 npm pack
+npm pack --workspace packages/locales
 ```
 
-Inspect the tarball and install it into a separate consumer project. Use the exported package paths,
+Both packages build themselves when packed, so a clean checkout after `npm ci` gives complete tarballs. Install
+the pair, `xsd-faker` and `xsd-faker-locales`, into a separate consumer project. Use the exported package paths,
 not imports from `src/`. Verify XML generation with the default validator on the supported Node
 versions. The package includes `dist/`, public documentation, synthetic examples, `LICENSE` and the npm manifest.
 Private reviews, test sources and working notes are excluded.
 
 Publishing is not part of these scripts. Before a release, check the package name, repository metadata
-and version.
+and version. Publish `xsd-faker-locales` first: `xsd-faker` depends on it, and its install fails until a matching
+version of the locale package is on the registry.

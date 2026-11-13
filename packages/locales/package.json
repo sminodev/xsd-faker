@@ -1,0 +1,28 @@
+{
+  "name": "xsd-faker-locales",
+  "version": "0.1.0",
+  "description": "Locale data for xsd-faker: names, addresses, contact patterns and common words.",
+  "type": "module",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "prepack": "npm run build"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "SOURCES.md",
+    "LICENSE"
+  ],
+  "license": "MIT"
+}
