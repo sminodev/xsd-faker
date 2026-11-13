@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { SchemaCompileError, validateXml } from './xmllint.js';
+import { SchemaCompileError, splitOutput, validateXml } from './xmllint.js';
 
 const XSD = `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:t" xmlns="urn:t" elementFormDefault="qualified">
   <xs:include schemaLocation="types/count.xsd"/>
@@ -24,6 +24,41 @@ describe('validateXml', () => {
     expect(verdicts[1]?.errors.join()).toContain('maxInclusive');
   });
 
+  it('gives a batch the verdicts and messages of single runs', async () => {
+    const documents = [
+      '<R xmlns="urn:t"><n>7</n></R>',
+      '<R xmlns="urn:t">\n<n>12</n></R>',
+      '<R xmlns="urn:t"><n>7</n>',
+      '<R xmlns="urn:t"><m/></R>',
+      '<R xmlns="urn:t"><n>1</n></R>',
+    ];
+    const batch = await validateXml(schema, documents);
+    const single = await Promise.all(documents.map(async (d) => (await validateXml(schema, [d]))[0]));
+    expect(batch).toEqual(single);
+    expect(batch.map((v) => v.valid)).toEqual([true, false, false, false, true]);
+    expect(batch[1]).toEqual({ valid: false, errors: [expect.stringContaining('maxInclusive')], lines: [2] });
+    expect(batch[2]?.errors[0]).toMatch(/^parser error/);
+  });
+
+  it('repeats schema warnings for each rejected document, as a single run does', async () => {
+    const warned = {
+      entry: 'w.xsd',
+      files: new Map([
+        [
+          'w.xsd',
+          `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+            <xs:import namespace="urn:other" schemaLocation="missing.xsd"/>
+            <xs:element name="R" type="xs:int"/></xs:schema>`,
+        ],
+      ]),
+    };
+    const documents = ['<R>1</R>', '<R>x</R>', '<R>y</R>'];
+    const batch = await validateXml(warned, documents);
+    expect(batch).toEqual(await Promise.all(documents.map(async (d) => (await validateXml(warned, [d]))[0])));
+    expect(batch[0]).toEqual({ valid: true, errors: [] });
+    expect(batch[2]?.errors.some((e) => e.includes('Skipping the import'))).toBe(true);
+  });
+
   it('returns nothing for no documents', async () => {
     expect(await validateXml(schema, [])).toEqual([]);
   });
@@ -41,5 +76,35 @@ describe('validateXml', () => {
   it('throws if the schema does not compile', async () => {
     const broken = { entry: 'a.xsd', files: new Map([['a.xsd', XSD.replace('type="Count"', 'type="Missing"')]]) };
     await expect(validateXml(broken, ['<R xmlns="urn:t"/>'])).rejects.toThrow(SchemaCompileError);
+  });
+});
+
+describe('splitOutput', () => {
+  it('splits the output into one block per document, the schema lines first', () => {
+    const output = [
+      'w.xsd:3: element import: Schemas parser warning : skipped',
+      'sample-4.xml validates',
+      'sample-5.xml:1: parser error : Premature end of data',
+      '<R>',
+      '   ^',
+      'sample-6.xml:2: Schemas validity error : bad',
+      'sample-6.xml fails to validate',
+      '',
+    ].join('\n');
+    const split = splitOutput(output, [4, 5, 6]);
+    expect(split?.preamble).toEqual(['w.xsd:3: element import: Schemas parser warning : skipped']);
+    expect(split?.documents.get(5)).toEqual(['sample-5.xml:1: parser error : Premature end of data', '<R>', '   ^']);
+    expect(split?.documents.get(6)).toHaveLength(2);
+  });
+
+  it('gives up on output it cannot attribute', () => {
+    // out of order
+    expect(splitOutput('sample-1.xml validates\nsample-0.xml validates\n', [0, 1])).toBeUndefined();
+    // a document without output
+    expect(splitOutput('sample-0.xml validates\n', [0, 1])).toBeUndefined();
+    // a line after a verdict that names no document
+    expect(splitOutput('sample-0.xml validates\nstray\nsample-1.xml validates\n', [0, 1])).toBeUndefined();
+    // a block without a verdict that is not a parser message
+    expect(splitOutput('sample-0.xml:1: Schemas validity error : x\nsample-1.xml validates\n', [0, 1])).toBeUndefined();
   });
 });
