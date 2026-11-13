@@ -11,18 +11,27 @@ src/
   node.ts              local file reader and directory boundary
   cli.ts, bin.ts       command implementation and process entry point
   options.ts           runtime checks for public options
-  xsd/                 schema loading, facets, diagnostics and regex translation
+  xsd/                 schema loading and redefine, the DOCTYPE scanner, facets, diagnostics, regex
+                       translation and the XML name tables
   regex/               pattern parser and bounded string generation
   values/              facet values, composition and small synthetic profiles
   generate/walker.ts   XSD traversal and choice strategies
+  generate/alternatives.ts  substitution group members and xsi:type candidates
+  generate/identities.ts    ID and IDREF planning with its integrity check
   xml/                 ordered instance tree and XML serialization
   json/serialize.ts    compact/tree JSON projection
   validate/xmllint.ts  explicit libxml2 verdicts
 ```
 
-The flow is `load → choose root → walk → serialize → validate`. Profiles only suggest values. They do
-not change cardinality, choices, namespaces or the schema itself. The instance tree is the shared
-boundary between XML and JSON; do not add a second generator for the JSON path.
+`xsd/namechars.ts` holds the character classes of XML 1.0, Second Edition, Appendix B, which XML Schema 1.0
+uses for its name types and for `\i` and `\c`.
+
+The flow is `load → choose root → walk → plan IDs → describe values → serialize → validate`. Describing
+values records, for each simple value, what the validator reads and whether it is a float or double, so
+that JSON follows the type; compact JSON keys are planned in the walker from the content model. Profiles
+only suggest values. They do not change cardinality, choices, namespaces or the schema itself. The
+instance tree is the shared boundary between XML and JSON; do not add a second generator for the JSON
+path.
 
 ## Checks
 
@@ -36,11 +45,12 @@ npm run format:check
 npm run verify
 ```
 
-`npm run verify` runs typecheck, typed ESLint checks, build, unit tests and acceptance tests in that order. The
-`src/**/*.test.ts` suite uses Vitest. It covers the parser, random source, facets, walker,
-serialization and validation. The `XSD_CORPUS` suite runs only when that variable names a directory of
-schemas; otherwise no corpus tests are registered. Each generated corpus sample must have
-`status: 'valid'`, not just a positive validator verdict.
+`npm run verify` runs typecheck, typed ESLint checks, build, unit tests and acceptance tests in that
+order. The `src/**/*.test.ts` suite uses Vitest. It covers the parser, random source, facets, walker,
+alternatives, ID planning, the DOCTYPE profile, redefine, size limits, serialization and validation. The
+`XSD_CORPUS` suite runs only when that variable names a directory of schemas; otherwise no corpus tests
+are registered. Each generated corpus sample must have `status: 'valid'`, not just a positive validator
+verdict.
 
 `test/acceptance.test.mjs` uses Node's test runner against the public entry points in `dist/` and the
 regular WASM validator. Build before running `node --test test/acceptance.test.mjs` directly. It covers
