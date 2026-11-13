@@ -1,6 +1,8 @@
+import { trimXmlSpace } from '../xml/space.js';
+
 /** Exact decimal arithmetic for facet bounds; bounded to 1000 digits of work. */
 export function decimalParts(value: string): { units: bigint; scale: number } | undefined {
-  const match = /^([+-]?)(\d*)(?:\.(\d*))?(?:[eE]([+-]?\d+))?$/.exec(value.trim());
+  const match = /^([+-]?)(\d*)(?:\.(\d*))?(?:[eE]([+-]?\d+))?$/.exec(trimXmlSpace(value));
   if (!match || (!match[2] && !match[3])) return undefined;
   const digits = `${match[2] ?? ''}${match[3] ?? ''}`;
   const scale = (match[3]?.length ?? 0) - Number(match[4] ?? 0);

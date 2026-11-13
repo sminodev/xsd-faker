@@ -213,7 +213,7 @@ test('two references to one group share its property', async () => {
     s: 'x',
   });
 });
-test('collisions and unsafe numbers inside an occurrence are refused', async () => {
+test('collisions inside an occurrence get expanded keys; unsafe numbers there are refused', async () => {
   const p = schema('<xs:element name="a" type="xs:string"/>', 'targetNamespace="urn:p"');
   const main = schema(
     '<xs:import namespace="urn:p" schemaLocation="p.xsd"/><xs:element name="R"><xs:complexType><xs:sequence maxOccurs="2"><xs:element name="a" type="xs:string"/><xs:element ref="p:a"/></xs:sequence></xs:complexType></xs:element>',
@@ -224,8 +224,8 @@ test('collisions and unsafe numbers inside an occurrence are refused', async () 
     { ...options, root: 'R' },
   );
   okay(clash);
-  assert.equal(clash.jsonStatus, 'unavailable');
-  assert.ok(clash.problems.some((problem) => problem.code === 'json-mapping'));
+  assert.equal(clash.jsonStatus, 'generated');
+  assert.deepEqual(Object.keys(clash.json['#sequence'][0]), ['{}a', '{urn:p}a']);
   const unsafe = await generated(
     '<xs:element name="R"><xs:complexType><xs:sequence maxOccurs="2"><xs:element name="n" type="xs:long" fixed="9223372036854775807"/></xs:sequence></xs:complexType></xs:element>',
   );
@@ -936,12 +936,13 @@ test('high-precision decimal is refused instead of rounded', async () => {
   okay(sample);
   assert.equal(sample.jsonStatus, 'unavailable');
 });
-test('element/attribute collisions preserve XML and refuse compact JSON', async () => {
+test('an attribute named like an element becomes @name in compact JSON; tree mode keeps both names', async () => {
   const sample = await generated(
     '<xs:element name="Root"><xs:complexType><xs:sequence><xs:element name="code" type="xs:string"/></xs:sequence><xs:attribute name="code" type="xs:string" use="required"/></xs:complexType></xs:element>',
+    { values },
   );
   okay(sample);
-  assert.equal(sample.jsonStatus, 'unavailable');
+  assert.deepEqual(plain(sample.json), { '@code': 'Test', code: 'Test' });
   const projected = toJson(sample.tree, { mode: 'tree' });
   assert.equal(projected.attributes[0].name, 'code');
   assert.equal(projected.children[0].name, 'code');
@@ -1179,6 +1180,167 @@ test('xs:redefine of a group and an attribute group with self-references gives t
   await assert.rejects(generateSample({ entry: 'schema.xsd', files: typeRedefined }, options), (error) =>
     error.problems.some((p) => p.code === 'unsupported-redefine'),
   );
+});
+test('colliding names get keys planned from the content model, not from the sample', async () => {
+  const files = {
+    'schema.xsd':
+      '<?xml version="1.0" encoding="UTF-8"?>\n<!-- Collision keys: the same local name from two namespaces (every partner becomes {ns}local), an attribute and an\n     element of the same name (the element stays local, the attribute becomes @local), and the text property name\n     reserved in every object: element {ns}value and attribute @value, also without text (Pair). Keys are planned from\n     the content model, not from the instance. -->\n<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns="urn:v:a" xmlns:b="urn:v:b" targetNamespace="urn:v:a" elementFormDefault="qualified">\n  <xs:import namespace="urn:v:b" schemaLocation="b.xsd"/>\n  <xs:element name="R">\n    <xs:complexType>\n      <xs:sequence>\n        <xs:element name="raceCode" type="xs:string"/>\n        <xs:element ref="b:raceCode" minOccurs="0"/>\n        <xs:element name="rows" type="xs:string"/>\n        <xs:element name="Pair" minOccurs="0">\n          <xs:complexType><xs:sequence><xs:element name="value" type="xs:string"/></xs:sequence><xs:attribute name="value" type="xs:string"/></xs:complexType>\n        </xs:element>\n        <xs:element name="Price" minOccurs="0">\n          <xs:complexType><xs:simpleContent><xs:extension base="xs:decimal"><xs:attribute name="value" type="xs:string"/></xs:extension></xs:simpleContent></xs:complexType>\n        </xs:element>\n      </xs:sequence>\n      <xs:attribute name="rows" type="xs:int"/>\n    </xs:complexType>\n  </xs:element>\n</xs:schema>\n',
+    'b.xsd':
+      '<?xml version="1.0" encoding="UTF-8"?>\n<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:v:b" elementFormDefault="qualified">\n  <xs:element name="raceCode" type="xs:string"/>\n</xs:schema>\n',
+  };
+  const all = await generateSample({ entry: 'schema.xsd', files }, { ...options, optional: 'all' });
+  okay(all);
+  assert.deepEqual(Object.keys(all.json), ['@rows', '{urn:v:a}raceCode', '{urn:v:b}raceCode', 'rows', 'Pair', 'Price']);
+  assert.deepEqual(Object.keys(all.json.Pair), ['@value', '{urn:v:a}value']);
+  assert.equal(typeof all.json['@rows'], 'number');
+  assert.deepEqual(Object.keys(all.json.Price), ['@value', 'value']);
+  assert.equal(typeof all.json.Price['@value'], 'string');
+  assert.equal(typeof all.json.Price.value, 'number');
+  const none = await generateSample({ entry: 'schema.xsd', files }, options);
+  okay(none);
+  assert.deepEqual(Object.keys(none.json), ['{urn:v:a}raceCode', 'rows']);
+});
+test('INF, -INF and NaN in the XML are JSON strings; generated doubles stay numbers', async () => {
+  const contract = await generateSample(
+    {
+      entry: 'schema.xsd',
+      files: {
+        'schema.xsd':
+          '<?xml version="1.0" encoding="UTF-8"?>\n<!-- INF, -INF and NaN as strings in an element, an attribute, a repeated element and a list; bound facets as in XSD 1.0. -->\n<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">\n  <xs:simpleType name="DoubleList"><xs:list itemType="xs:double"/></xs:simpleType>\n  <xs:simpleType name="NonNegative"><xs:restriction base="xs:double"><xs:minInclusive value="0"/></xs:restriction></xs:simpleType>\n  <xs:element name="R">\n    <xs:complexType>\n      <xs:sequence>\n        <xs:element name="d" type="xs:double"/>\n        <xs:element name="f" type="xs:float" maxOccurs="3"/>\n        <xs:element name="l" type="DoubleList"/>\n        <xs:element name="b" type="NonNegative"/>\n      </xs:sequence>\n      <xs:attribute name="att" type="xs:double"/>\n    </xs:complexType>\n  </xs:element>\n</xs:schema>\n',
+      },
+    },
+    { ...options, optional: 'all' },
+  );
+  okay(contract);
+  for (const value of [contract.json.att, contract.json.d, ...contract.json.f, ...contract.json.l, contract.json.b])
+    assert.equal(typeof value, 'number');
+  const special = await generated(
+    '<xs:simpleType name="DL"><xs:list itemType="xs:double"/></xs:simpleType><xs:element name="R"><xs:complexType><xs:sequence><xs:element name="d"><xs:simpleType><xs:restriction base="xs:double"><xs:enumeration value="INF"/></xs:restriction></xs:simpleType></xs:element><xs:element name="l" type="DL" fixed="1 INF -INF NaN"/><xs:element name="u" fixed=" NaN "><xs:simpleType><xs:union memberTypes="xs:decimal xs:float"/></xs:simpleType></xs:element></xs:sequence><xs:attribute name="att" type="xs:float" fixed="-INF"/></xs:complexType></xs:element>',
+    { optional: 'all' },
+  );
+  okay(special);
+  assert.deepEqual(plain(special.json), { att: '-INF', d: 'INF', l: [1, 'INF', '-INF', 'NaN'], u: 'NaN' });
+});
+test('only XML white space is collapsed: U+00A0 in a fixed token value stays in XML and JSON', async () => {
+  const sample = await generateSample(
+    {
+      entry: 'schema.xsd',
+      files: {
+        'schema.xsd':
+          '<?xml version="1.0" encoding="UTF-8"?>\n<!-- XML whitespace is only #x20, #x9, #xA and #xD. U+00A0 (no-break space) and other Unicode spaces are kept by\n     replace and collapse. -->\n<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">\n  <xs:simpleType name="List"><xs:list itemType="xs:token"/></xs:simpleType>\n  <xs:element name="R">\n    <xs:complexType>\n      <xs:sequence>\n        <xs:element name="t" type="xs:token" fixed="&#160;A&#160;"/>\n        <xs:element name="u" type="xs:token"/>\n        <xs:element name="l" type="List"/>\n      </xs:sequence>\n    </xs:complexType>\n  </xs:element>\n</xs:schema>\n',
+      },
+    },
+    options,
+  );
+  okay(sample);
+  assert.match(sample.xml, /<t>\u00a0A\u00a0<\/t>/);
+  assert.equal(sample.json.t, '\u00a0A\u00a0');
+  assert.ok(Array.isArray(sample.json.l));
+});
+test('a nil element with xsi:type keeps the attributes of that type', async () => {
+  const files = {
+    'schema.xsd':
+      '<?xml version="1.0" encoding="UTF-8"?>\n<!-- xsi:nil on a simple type, a complex type with an attribute, simple content with an attribute, and a repeated element. -->\n<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns="urn:v:nil" targetNamespace="urn:v:nil" elementFormDefault="qualified">\n  <xs:complexType name="B"/>\n  <xs:complexType name="D"><xs:complexContent><xs:extension base="B"><xs:attribute name="extra" type="xs:string" use="required"/></xs:extension></xs:complexContent></xs:complexType>\n  <xs:element name="R">\n    <xs:complexType>\n      <xs:sequence>\n        <xs:element name="D" type="xs:date" nillable="true"/>\n        <xs:element name="A" nillable="true">\n          <xs:complexType>\n            <xs:sequence><xs:element name="Place" type="xs:string"/></xs:sequence>\n            <xs:attribute name="kind" type="xs:string" use="required"/>\n          </xs:complexType>\n        </xs:element>\n        <xs:element name="B" nillable="true">\n          <xs:complexType><xs:simpleContent><xs:extension base="xs:decimal"><xs:attribute name="w" type="xs:string"/></xs:extension></xs:simpleContent></xs:complexType>\n        </xs:element>\n        <xs:element name="K" nillable="true" minOccurs="0">\n          <xs:complexType><xs:sequence><xs:element name="X" type="xs:int"/></xs:sequence></xs:complexType>\n        </xs:element>\n        <xs:element name="L" type="xs:int" nillable="true" maxOccurs="3"/>\n        <xs:element name="N" type="xs:int" nillable="true"/>\n        <xs:element name="P" type="B" nillable="true" minOccurs="0"/>\n      </xs:sequence>\n    </xs:complexType>\n  </xs:element>\n</xs:schema>\n',
+  };
+  const forms = new Set();
+  for (let seed = 1; seed <= 30; seed += 1) {
+    const sample = await generateSample(
+      { entry: 'schema.xsd', files },
+      { ...options, seed, optional: 'all', nil: 'random', choice: 'random' },
+    );
+    okay(sample);
+    const p = sample.json.P;
+    if (p && p['#type'] && p.value === null) forms.add(Object.keys(p).join(','));
+  }
+  assert.deepEqual([...forms], ['#type,extra,value']);
+});
+test('mixed content is a fragment, also with repeated groups and when an extension inherits it', async () => {
+  const files = {
+    'schema.xsd':
+      '<?xml version="1.0" encoding="UTF-8"?>\n<!-- Declared mixed content: the children are always a fragment under the text property, also with repeated groups\n     in the content model; the text property is always present, empty as "". -->\n<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">\n  <xs:group name="cnt"><xs:choice><xs:element name="b" type="xs:string"/><xs:element name="i" type="xs:string"/></xs:choice></xs:group>\n  <xs:complexType name="Title" mixed="true">\n    <xs:group ref="cnt" minOccurs="0" maxOccurs="unbounded"/>\n    <xs:attribute name="id" type="xs:string"/>\n  </xs:complexType>\n  <xs:element name="R">\n    <xs:complexType>\n      <xs:sequence>\n        <xs:element name="T" type="Title"/>\n        <xs:element name="L" type="Title"/>\n      </xs:sequence>\n    </xs:complexType>\n  </xs:element>\n</xs:schema>\n',
+  };
+  const sample = await generateSample({ entry: 'schema.xsd', files }, { ...options, optional: 'all', repeat: 2 });
+  okay(sample);
+  for (const name of ['T', 'L']) {
+    assert.deepEqual(Object.keys(sample.json[name]), ['id', 'value']);
+    assert.match(sample.json[name].value, /<(b|i)>/);
+  }
+  // An extension of a mixed type without mixed="true" of its own stays mixed.
+  const inherited = await generated(
+    '<xs:complexType name="Base" mixed="true"><xs:sequence><xs:element name="b" type="xs:string" minOccurs="0" maxOccurs="unbounded"/></xs:sequence></xs:complexType><xs:element name="t"><xs:complexType><xs:complexContent><xs:extension base="Base"><xs:attribute name="class" type="xs:string"/></xs:extension></xs:complexContent></xs:complexType></xs:element>',
+    { optional: 'all', repeat: 2 },
+  );
+  okay(inherited);
+  assert.deepEqual(Object.keys(inherited.json), ['class', 'value']);
+  assert.match(inherited.json.value, /^\S+ <b>/);
+});
+test('a branch that cannot be generated is not chosen; coverage leaves it out', async () => {
+  const body =
+    '<xs:complexType name="Abs" abstract="true"><xs:sequence><xs:element name="x" type="xs:int"/></xs:sequence></xs:complexType><xs:element name="Head" abstract="true" type="xs:string"/><xs:element name="r"><xs:complexType><xs:sequence><xs:choice><xs:element name="base" type="Abs"/><xs:element name="name" type="xs:string"/></xs:choice><xs:choice><xs:element ref="Head"/><xs:element name="n2" type="xs:string"/></xs:choice></xs:sequence></xs:complexType></xs:element>';
+  for (const choice of ['first', 'smallest', 'random'])
+    for (const seed of [1, 2, 3]) {
+      const sample = await generated(body, { choice, seed, root: 'r' });
+      okay(sample);
+      assert.deepEqual(Object.keys(sample.json), ['name', 'n2']);
+    }
+  const batch = await generateSamples(input(body), { ...options, root: 'r', count: 2, coverage: true });
+  assert.equal(batch.coverage.complete, true);
+});
+test('a schema nesting deeper than the call stack is a resource-limit, never a RangeError', async () => {
+  const deep = (n) =>
+    `<xs:element name="r"><xs:complexType><xs:sequence>${'<xs:sequence>'.repeat(n)}<xs:element name="a" type="xs:int"/>${'</xs:sequence>'.repeat(n)}</xs:sequence></xs:complexType></xs:element>`;
+  // libxml2 itself does not compile 500 nested groups, so this one is not validated.
+  assert.equal((await generated(deep(500), { validate: false })).status, 'unvalidated');
+  await assert.rejects(generated(deep(3000)), (error) => error.problems?.some((p) => p.code === 'resource-limit'));
+  let chain = '<xs:group name="G0"><xs:sequence><xs:element name="a" type="xs:int"/></xs:sequence></xs:group>';
+  for (let i = 1; i <= 3000; i += 1)
+    chain += `<xs:group name="G${i}"><xs:sequence><xs:group ref="G${i - 1}"/></xs:sequence></xs:group>`;
+  await assert.rejects(
+    generated(`${chain}<xs:element name="r"><xs:complexType><xs:group ref="G3000"/></xs:complexType></xs:element>`),
+    (error) => error.problems?.some((p) => p.code === 'resource-limit'),
+  );
+  const cyclic = await generated(
+    '<xs:simpleType name="A"><xs:list itemType="A"/></xs:simpleType><xs:element name="r" type="A"/>',
+    { validate: false },
+  );
+  assert.ok(cyclic.problems.some((p) => p.code === 'circular-type'));
+});
+test('#type is reserved by a type with alternatives, also in a sample without xsi:type', async () => {
+  const sample = await generated(
+    '<xs:complexType name="T"><xs:sequence><xs:group ref="type" maxOccurs="2"/></xs:sequence></xs:complexType><xs:group name="type"><xs:sequence><xs:element name="a" type="xs:string"/></xs:sequence></xs:group><xs:complexType name="U"><xs:complexContent><xs:extension base="T"/></xs:complexContent></xs:complexType><xs:element name="r"><xs:complexType><xs:sequence><xs:element name="e" type="T"/></xs:sequence></xs:complexType></xs:element>',
+    { repeat: 2 },
+  );
+  okay(sample);
+  assert.doesNotMatch(sample.xml, /xsi:type/);
+  assert.equal(sample.jsonStatus, 'unavailable');
+});
+test('textProperty must be an NCName other than __proto__, or #text', async () => {
+  await assert.rejects(generateSample(simple, { ...options, json: { textProperty: '{}value' } }), TypeError);
+  okay(await generateSample(simple, { ...options, json: { textProperty: '#text' } }));
+  const c = capture();
+  assert.equal(await run([order, '--format', 'json', '--text-property', '@value'], c.io, validator), 1);
+  assert.match(c.result.err, /textProperty/);
+});
+test('elements of xs:anyType are mapped like wildcard content, empty as ""', async () => {
+  const files = {
+    'schema.xsd':
+      '<?xml version="1.0" encoding="UTF-8"?>\n<!-- Elements without a type or of type xs:anyType are mapped like wildcard content (empty as ""); a complex xsi:type\n     uses #type, a simple xsi:type is a mapping error. -->\n<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">\n  <xs:complexType name="K"><xs:sequence><xs:element name="Name" type="xs:string"/></xs:sequence></xs:complexType>\n  <xs:element name="R">\n    <xs:complexType>\n      <xs:sequence>\n        <xs:element name="free"/>\n        <xs:element name="empty" type="xs:anyType"/>\n        <xs:element name="typed" type="xs:anyType" minOccurs="0"/>\n        <xs:element name="simple" type="xs:anyType" minOccurs="0"/>\n      </xs:sequence>\n    </xs:complexType>\n  </xs:element>\n</xs:schema>\n',
+  };
+  for (const optional of ['none', 'all']) {
+    const sample = await generateSample({ entry: 'schema.xsd', files }, { ...options, optional });
+    okay(sample);
+    assert.deepEqual(
+      plain(sample.json),
+      optional === 'none' ? { free: '', empty: '' } : { free: '', empty: '', typed: '', simple: '' },
+    );
+  }
+});
+test('wildcard content of two namespaces in one object takes different names', async () => {
+  const sample = await generated(
+    '<xs:element name="R"><xs:complexType><xs:sequence><xs:any namespace="urn:x" processContents="lax"/><xs:any namespace="urn:y" processContents="lax"/></xs:sequence></xs:complexType></xs:element>',
+  );
+  okay(sample);
+  assert.deepEqual(plain(sample.json), { any: 'any content', any2: 'any content' });
 });
 test('schema size limits apply to the in-memory API, the file API, the root listing and the CLI', async () => {
   const text = simple.files['a.xsd'];
@@ -1550,6 +1712,57 @@ test('name types and \\i, \\c follow XML 1.0, Second Edition, as libxml2 does', 
     '<xs:element name="R"><xs:simpleType><xs:restriction base="xs:NCName"><xs:pattern value="[äą][a-z]\\c"/></xs:restriction></xs:simpleType></xs:element>',
   );
   okay(allowed);
+});
+test('an xs:double or xs:float value has JSON when its binary value survives; a decimal stays exact', async () => {
+  const double = await generated(
+    '<xs:element name="r"><xs:simpleType><xs:restriction base="xs:double"><xs:enumeration value="2.7457332729808998E126"/></xs:restriction></xs:simpleType></xs:element>',
+  );
+  okay(double);
+  assert.equal(double.jsonStatus, 'generated');
+  assert.equal(double.json, Number('2.7457332729808998E126'));
+  const float = await generated(
+    '<xs:element name="r"><xs:complexType><xs:attribute name="f" type="xs:float" fixed="0.1"/><xs:attribute name="u" fixed="1E3"><xs:simpleType><xs:union memberTypes="xs:decimal xs:double"/></xs:simpleType></xs:attribute></xs:complexType></xs:element>',
+    { optional: 'all' },
+  );
+  okay(float);
+  assert.deepEqual(plain(float.json), { f: 0.1, u: 1000 });
+  const decimal = await generated(
+    '<xs:element name="r"><xs:simpleType><xs:restriction base="xs:decimal"><xs:enumeration value="0.1000000000000000000001"/></xs:restriction></xs:simpleType></xs:element>',
+  );
+  okay(decimal);
+  assert.equal(decimal.jsonStatus, 'unavailable');
+});
+test('fixed values reach JSON as the validator reads them: numbers collapsed, unions by member', async () => {
+  const number = await generated(
+    '<xs:element name="r"><xs:complexType><xs:attribute name="att" type="xs:integer" fixed="   123   "/></xs:complexType></xs:element>',
+    { optional: 'all' },
+  );
+  okay(number);
+  assert.match(number.xml, /att=" {3}123 {3}"/);
+  assert.deepEqual(plain(number.json), { att: 123 });
+  const union = await generated(
+    '<xs:element name="root" fixed="ENU "><xs:simpleType><xs:union memberTypes="xs:gYearMonth xs:language xs:normalizedString"/></xs:simpleType></xs:element>',
+  );
+  okay(union);
+  assert.match(union.xml, /<root>ENU <\/root>/);
+  assert.equal(union.json, 'ENU');
+});
+test('a generated QName declares the prefix its pattern asks for, also in lists', async () => {
+  const pattern = '<xs:pattern value="[\\i-[:]][\\c-[:]]+:[\\i-[:]][\\c-[:]]+"/>';
+  for (const seed of [1, 2, 3, 4, 5]) {
+    const atomic = await generated(
+      `<xs:element name="r"><xs:simpleType><xs:restriction base="xs:QName">${pattern}</xs:restriction></xs:simpleType></xs:element>`,
+      { seed },
+    );
+    okay(atomic);
+    const prefix = /<r xmlns:([^=]+)="urn:example:prefix:\1">\1:/.exec(atomic.xml);
+    assert.ok(prefix, atomic.xml);
+    const list = await generated(
+      `<xs:simpleType name="Q"><xs:restriction base="xs:QName">${pattern}</xs:restriction></xs:simpleType><xs:element name="r"><xs:complexType><xs:attribute name="q" use="required"><xs:simpleType><xs:list itemType="Q"/></xs:simpleType></xs:attribute></xs:complexType></xs:element>`,
+      { seed },
+    );
+    okay(list);
+  }
 });
 test('IDREF cannot produce a false successful status', async () => {
   const sample = await generated(

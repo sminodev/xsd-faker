@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Facets } from '../xsd/facets.js';
-import { checkValue, digitCounts } from './check.js';
+import { binaryKind, checkValue, digitCounts, settledValue } from './check.js';
 
 const atomic = (builtin: string, extra: Partial<Facets> = {}): Facets => ({
   builtin,
@@ -101,5 +101,65 @@ describe('name characters of XML 1.0, Second Edition', () => {
 
   it('keeps \\d independent of the name tables', () => {
     expect(checkValue(atomic('string', { patterns: [['\\d{3}']] }), '١٢٣')).toBeUndefined();
+  });
+});
+
+describe('the value a validator reads', () => {
+  const union = (...members: Facets[]): Facets => ({
+    builtin: 'anySimpleType',
+    variety: 'union',
+    patterns: [],
+    members,
+  });
+
+  it('normalizes whitespace by the type, and a union by its first accepting member', () => {
+    expect(settledValue(atomic('integer'), '   123   ')).toBe('123');
+    expect(settledValue(atomic('string'), ' a  b ')).toBe(' a  b ');
+    expect(settledValue(union(atomic('gYearMonth'), atomic('language'), atomic('normalizedString')), 'ENU ')).toBe(
+      'ENU',
+    );
+    expect(settledValue(union(atomic('normalizedString'), atomic('token')), 'a\tb ')).toBe('a b ');
+  });
+
+  it('tells float and double values by the type, the accepting member and all list items', () => {
+    expect(binaryKind(atomic('double'), '1')).toBe('double');
+    expect(binaryKind(atomic('float'), '1')).toBe('float');
+    expect(binaryKind(atomic('decimal'), '1')).toBeUndefined();
+    expect(binaryKind(union(atomic('decimal'), atomic('double')), '1.5')).toBeUndefined();
+    expect(binaryKind(union(atomic('decimal'), atomic('double')), '1E3')).toBe('double');
+    const list = (item: Facets): Facets => ({ builtin: 'anySimpleType', variety: 'list', patterns: [], item });
+    expect(binaryKind(list(atomic('float')), '1 2')).toBe('float');
+    expect(binaryKind(list(union(atomic('decimal'), atomic('double'))), '1 1E3')).toBeUndefined();
+  });
+
+  it('refuses the prefix xmlns in a QName, which no document can bind', () => {
+    expect(checkValue(atomic('QName'), 'xmlns:a')).toEqual(expect.any(String));
+    expect(checkValue(atomic('QName'), 'xml:lang')).toBeUndefined();
+  });
+});
+
+describe('INF, -INF and NaN against bounds (XML Schema 1.0)', () => {
+  it('excludes NaN by any bound, INF by an upper and -INF by a lower one', () => {
+    const nonNegative = atomic('double', { min: { value: 0, lexical: '0', exclusive: false } });
+    expect(checkValue(nonNegative, 'NaN')).toEqual(expect.any(String));
+    expect(checkValue(nonNegative, '-INF')).toEqual(expect.any(String));
+    expect(checkValue(nonNegative, 'INF')).toBeUndefined();
+    expect(checkValue(atomic('float', { max: { value: 1, lexical: '1', exclusive: false } }), 'INF')).toEqual(
+      expect.any(String),
+    );
+    expect(checkValue(atomic('double'), 'NaN')).toBeUndefined();
+    expect(checkValue(atomic('double'), '+INF')).toEqual(expect.any(String));
+    expect(checkValue(atomic('decimal'), 'INF')).toEqual(expect.any(String));
+  });
+});
+
+describe('XML white space only', () => {
+  it('collapses #x20, #x9, #xA and #xD, never U+00A0 or U+2003', () => {
+    expect(settledValue(atomic('token'), '\u00a0A\u00a0')).toBe('\u00a0A\u00a0');
+    expect(settledValue(atomic('token'), '  x\u00a0 y\u2003 ')).toBe('x\u00a0 y\u2003');
+    expect(settledValue(atomic('token'), '\t a \n b\r')).toBe('a b');
+    const list: Facets = { builtin: 'anySimpleType', variety: 'list', patterns: [], item: atomic('token'), length: 2 };
+    expect(checkValue(list, 'a\u00a0b c')).toBeUndefined();
+    expect(checkValue(atomic('integer'), '\u00a01')).toEqual(expect.any(String));
   });
 });

@@ -1,10 +1,11 @@
 // Checks a value against the facets of its simple type. The generator uses it to accept or reject candidates, so it
 // has to be strict: whatever it accepts must be valid for the XML Schema too.
 
-import { type Facets, INTEGERS, isNumeric } from '../xsd/facets.js';
+import { binaryValue, type Bound, type Facets, INTEGERS, isNumeric } from '../xsd/facets.js';
 import { combinePatterns, translateBody } from '../xsd/xsd-regex.js';
 import { compareDecimal } from './decimal.js';
 import { lexicalRegExp } from './lexical.js';
+import { splitXmlSpace, trimXmlSpace } from '../xml/space.js';
 
 const patternCache = new Map<string, RegExp>();
 
@@ -52,7 +53,25 @@ function checkLength(facets: Facets, length: number, unit: string): string | und
   return undefined;
 }
 
+/**
+ * The bounds of xs:float and xs:double, compared in the value space of the type (XML Schema 1.0, Datatypes 3.2.4
+ * and 3.2.5): a literal is the nearest float or double, so `1e39` is INF as an xs:float. NaN meets no bound.
+ */
+function checkBinary(builtin: 'float' | 'double', facets: Facets, value: string): string | undefined {
+  const v = binaryValue(builtin, value);
+  const of = (bound: Bound) => binaryValue(builtin, bound.lexical ?? String(bound.value));
+  const { min, max } = facets;
+  if (min && !(min.exclusive ? v > of(min) : v >= of(min))) {
+    return Number.isNaN(v) ? 'is NaN, which a bound excludes' : `is below the lower bound ${min.lexical ?? min.value}`;
+  }
+  if (max && !(max.exclusive ? v < of(max) : v <= of(max))) {
+    return Number.isNaN(v) ? 'is NaN, which a bound excludes' : `is above the upper bound ${max.lexical ?? max.value}`;
+  }
+  return undefined;
+}
+
 function checkNumber(facets: Facets, value: string): string | undefined {
+  if (facets.builtin === 'float' || facets.builtin === 'double') return checkBinary(facets.builtin, facets, value);
   const number = Number(value);
   if (INTEGERS[facets.builtin] !== undefined && !Number.isInteger(number)) {
     return 'is not an integer';
@@ -111,7 +130,45 @@ export function normalizeSpace(facets: Facets, value: string): string {
     return value;
   }
   const replaced = value.replace(/[\t\n\r]/g, ' ');
-  return mode === 'replace' ? replaced : replaced.replace(/ +/g, ' ').trim();
+  return mode === 'replace' ? replaced : trimXmlSpace(replaced.replace(/ +/g, ' '));
+}
+
+/** The member of a union that reads a value: the first that accepts it, in the declared order. */
+function acceptingMember(facets: Facets, value: string): Facets | undefined {
+  return (facets.members ?? []).find((member) => checkValue(member, value) === undefined);
+}
+
+/**
+ * The value as the validator reads it: after the whitespace rule of its type, and for a union as the first member
+ * that accepts it normalizes it. Unions have no whiteSpace rule of their own.
+ */
+export function settledValue(facets: Facets, value: string): string {
+  const normalized = normalizeSpace(facets, value);
+  if (facets.variety !== 'union') {
+    return normalized;
+  }
+  const member = acceptingMember(facets, normalized);
+  return member ? settledValue(member, normalized) : normalized;
+}
+
+/**
+ * Whether a value is an xs:float or xs:double value, whose JSON number is checked against its binary value: by its
+ * type, for a union by the member that reads it, for a list only if all items agree.
+ */
+export function binaryKind(facets: Facets, value: string): 'float' | 'double' | undefined {
+  if (facets.variety === 'list') {
+    const items = normalizeSpace(facets, value)
+      .split(' ')
+      .filter((item) => item !== '');
+    const kinds = new Set(items.map((item) => (facets.item ? binaryKind(facets.item, item) : undefined)));
+    return kinds.size === 1 ? [...kinds][0] : undefined;
+  }
+  if (facets.variety === 'union') {
+    const normalized = normalizeSpace(facets, value);
+    const member = acceptingMember(facets, normalized);
+    return member ? binaryKind(member, normalized) : undefined;
+  }
+  return facets.builtin === 'float' || facets.builtin === 'double' ? facets.builtin : undefined;
 }
 
 /** Why `value` is not allowed by `facets`, or undefined if it is. */
@@ -130,7 +187,7 @@ export function checkValue(facets: Facets, value: string): string | undefined {
       : 'matches none of the member types';
   }
   if (facets.variety === 'list') {
-    const items = value.trim() === '' ? [] : value.trim().split(/\s+/);
+    const items = splitXmlSpace(value);
     const length = checkLength(facets, items.length, 'items');
     if (length) {
       return length;
@@ -146,6 +203,10 @@ export function checkValue(facets: Facets, value: string): string | undefined {
   const lexical = lexicalRegExp(facets.builtin);
   if ((lexical && !lexical.test(value)) || (facets.builtin === 'anyURI' && !isUriReference(value))) {
     return `is not a valid xs:${facets.builtin}`;
+  }
+  // The prefix xmlns cannot be declared, so no document can bind it in a QName.
+  if ((facets.builtin === 'QName' || facets.builtin === 'NOTATION') && value.startsWith('xmlns:')) {
+    return 'uses the reserved prefix xmlns';
   }
   if (isNumeric(facets.builtin)) {
     return checkNumber(facets, value);

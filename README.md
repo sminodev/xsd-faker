@@ -131,9 +131,13 @@ on generated declarations take precedence. For more control, supply a `ValueSour
 ## JSON output
 
 The default compact form uses local names as property names, typed numbers and booleans, arrays for
-repeatable elements, and `value` for simple content with attributes. It has explicit limits:
-namespace collisions, attribute/element collisions and unsafe numeric conversions are refused rather
-than silently changing data.
+repeatable elements and for list values, arrays of objects for repeating groups, and `value` for simple
+content with attributes. Nil elements are `null`, an element with `xsi:type` names its type in `#type`,
+and wildcard content and elements of `xs:anyType` are mapped without the schema. Names that collide in
+the content model get planned keys: `{namespace}local` for elements of several namespaces, `@local` for
+an attribute named like an element; the name of the text property is reserved in every object. `INF`,
+`-INF` and `NaN` are strings. It has explicit limits: collisions the content model does not show and
+unsafe numeric conversions are refused rather than silently changing data.
 
 Use `json: { mode: 'tree' }` or `--json-mode tree` when names, child order and lexical values matter.
 Use `json: { numbers: 'string' }` when consumers need decimal values as strings. These are different

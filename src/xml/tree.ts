@@ -9,11 +9,17 @@ export interface InstanceAttribute {
   /** namespace URI, '' for none */
   ns: string;
   name: string;
+  /** the compact JSON key where it is not the local name: `@name` or `@{ns}name`, planned from the type */
+  key?: string;
   value: string;
   /** the JSON type of the value, or of each item of a list */
   type: JsonType;
   /** the value is an xs:list: a JSON array of its space-separated items */
   list?: boolean;
+  /** the value as the validator reads it, where it differs from `value`; JSON uses it */
+  normalized?: string;
+  /** an xs:float or xs:double value (for a list, each item): its JSON number keeps the binary value */
+  binary?: 'float' | 'double';
 }
 
 export interface InstanceText {
@@ -23,6 +29,10 @@ export interface InstanceText {
   type: JsonType;
   /** the value is an xs:list: a JSON array of its space-separated items */
   list?: boolean;
+  /** the value as the validator reads it, where it differs from `value`; JSON uses it */
+  normalized?: string;
+  /** an xs:float or xs:double value (for a list, each item): its JSON number keeps the binary value */
+  binary?: 'float' | 'double';
 }
 
 /** One occurrence of a repeated model group. */
@@ -56,6 +66,12 @@ export interface InstanceElement {
   wildcard?: boolean;
   /** the type named by xsi:type, a type derived from the declared one */
   xsiType?: { ns: string; name: string };
+  /** the compact JSON key where it is not the local name: `{ns}name`, planned from the content model */
+  key?: string;
+  /** of type xs:anyType, declared or implied: JSON maps its content without the schema, as wildcard content */
+  anyType?: boolean;
+  /** its type has alternatives xsi:type may name, so its JSON object reserves `#type`, also without xsi:type */
+  typeable?: boolean;
 }
 
 export type InstanceNode = InstanceElement | InstanceText;

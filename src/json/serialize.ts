@@ -1,4 +1,6 @@
 import { type NamespacePlan, planNamespaces, serializeMixed } from '../xml/serialize.js';
+import { compareDecimal } from '../values/decimal.js';
+import { NAME_CHAR, NAME_START_CHAR } from '../xsd/namechars.js';
 import type { InstanceAttribute, InstanceElement, InstanceText, JsonType } from '../xml/tree.js';
 
 const XSI = 'http://www.w3.org/2001/XMLSchema-instance';
@@ -23,6 +25,16 @@ export interface JsonOptions {
 export class JsonMappingError extends Error {
   override name = 'JsonMappingError';
 }
+const NCNAME = new RegExp(`^(?!.*:)[${NAME_START_CHAR}][${NAME_CHAR}]*$`, 'u');
+/**
+ * A text property is an NCName other than `__proto__`, or exactly `#text`; so it never meets a key of the form
+ * `{ns}local`, `@local`, `#type` or a group key.
+ */
+export function checkTextProperty(name: unknown): void {
+  if (typeof name !== 'string' || (name !== '#text' && (!NCNAME.test(name) || name === '__proto__'))) {
+    throw new TypeError("textProperty must be an NCName other than __proto__, or '#text'");
+  }
+}
 function canonicalDecimal(value: string): string | undefined {
   const m = /^([+-]?)(\d*)(?:\.(\d*))?(?:[eE]([+-]?\d+))?$/.exec(value);
   if (!m || `${m[2]}${m[3] ?? ''}` === '') {
@@ -39,8 +51,70 @@ function canonicalDecimal(value: string): string | undefined {
   const digits = raw.replace(/0+$/, '');
   return `${m[1] === '-' ? '-' : ''}${digits}e${exponent - (m[3]?.length ?? 0) + raw.length - digits.length}`;
 }
-function primitive(value: string, type: JsonType, numbers: JsonOptions['numbers']): JsonValue {
-  if (type === 'string' || (numbers === 'string' && (type === 'integer' || type === 'number'))) {
+const float = new Float32Array(1);
+const floatBits = new Uint32Array(float.buffer);
+/** The float next to `f` in the direction of `toward`. */
+function nextFloat(f: number, toward: number): number {
+  if (f === 0) {
+    return Math.sign(toward) * 2 ** -149;
+  }
+  float[0] = f;
+  floatBits[0] = (floatBits[0] ?? 0) + (toward > f === f > 0 ? 1 : -1);
+  return float[0] ?? f;
+}
+/** The exact decimal value of a double, as `digits` or `digitse-k`. */
+function exactDecimal(d: number): string {
+  const view = new DataView(new ArrayBuffer(8));
+  view.setFloat64(0, d);
+  const bits = view.getBigUint64(0);
+  const biased = Number((bits >> 52n) & 0x7ffn);
+  const fraction = bits & ((1n << 52n) - 1n);
+  const mantissa = biased === 0 ? fraction : fraction | (1n << 52n);
+  const exponent = (biased === 0 ? 1 : biased) - 1075;
+  const sign = bits >> 63n ? '-' : '';
+  return exponent >= 0
+    ? `${sign}${mantissa << BigInt(exponent)}`
+    : `${sign}${mantissa * 5n ** BigInt(-exponent)}e${exponent}`;
+}
+/**
+ * Whether the double `d` read from `text` stands for the same xs:float value: the nearest 32-bit float to the text.
+ * Rounding to a double first and then to a float differs from rounding the text to a float directly only where the
+ * double lies exactly halfway between two floats; there the text decides.
+ */
+function keepsFloat(text: string, d: number): boolean {
+  const f = Math.fround(d);
+  if (!Number.isFinite(f)) {
+    return false;
+  }
+  if (f === d) {
+    return true;
+  }
+  const other = nextFloat(f, d);
+  if ((f + other) / 2 !== d) {
+    return true;
+  }
+  const side = compareDecimal(text, exactDecimal(d));
+  if (side === undefined) {
+    return false;
+  }
+  return side === 0 || f === (side > 0 ? Math.max(f, other) : Math.min(f, other));
+}
+function primitive(
+  value: string,
+  type: JsonType,
+  numbers: JsonOptions['numbers'],
+  binary?: 'float' | 'double',
+): JsonValue {
+  if (type === 'string') {
+    return value;
+  }
+  // Numbers and booleans always collapse whitespace.
+  value = value.replace(/^[ \t\n\r]+|[ \t\n\r]+$/g, '');
+  if (numbers === 'string' && (type === 'integer' || type === 'number')) {
+    return value;
+  }
+  // INF, -INF and NaN of xs:float and xs:double have no JSON number; they stay strings, never Infinity or null.
+  if (type === 'number' && (value === 'INF' || value === '-INF' || value === 'NaN')) {
     return value;
   }
   if (value === '') {
@@ -56,24 +130,51 @@ function primitive(value: string, type: JsonType, numbers: JsonOptions['numbers'
     throw new JsonMappingError(`invalid boolean lexical value: ${value}`);
   }
   const number = Number(value);
-  if (
-    !Number.isFinite(number) ||
-    (type === 'integer' && !Number.isSafeInteger(number)) ||
-    canonicalDecimal(value) !== canonicalDecimal(String(number))
-  ) {
+  // A literal past the largest finite float or double is INF or -INF of its type, such as 1e39 for xs:float.
+  if (binary === 'float' || binary === 'double') {
+    const typed = binary === 'float' ? Math.fround(number) : number;
+    if (typed === Infinity) return 'INF';
+    if (typed === -Infinity) return '-INF';
+  }
+  // An xs:double is the double nearest to its text, an xs:float the nearest 32-bit float; a decimal is exact.
+  const exact =
+    binary === 'double'
+      ? true
+      : binary === 'float'
+        ? keepsFloat(value, number)
+        : canonicalDecimal(value) === canonicalDecimal(String(number));
+  if (!Number.isFinite(number) || (type === 'integer' && !Number.isSafeInteger(number)) || !exact) {
     throw new JsonMappingError(
       `number cannot be represented without changing its decimal value: ${value}; use numbers: 'string' or mode: 'tree'`,
     );
   }
   return number;
 }
+type Typed = Pick<InstanceText, 'value' | 'type' | 'list' | 'normalized' | 'binary'>;
 /** A typed value; an xs:list becomes an array of its items, each typed, and an empty list `[]`. */
-function typed(value: string, type: JsonType, list: boolean | undefined, numbers: JsonOptions['numbers']): JsonValue {
-  if (!list) {
-    return primitive(value, type, numbers);
+function typed(holder: Typed, numbers: JsonOptions['numbers']): JsonValue {
+  const value = holder.normalized ?? holder.value;
+  if (!holder.list) {
+    return primitive(value, holder.type, numbers, holder.binary);
   }
   const trimmed = value.replace(/^[ \t\n\r]+|[ \t\n\r]+$/g, '');
-  return trimmed === '' ? [] : trimmed.split(XML_SPACE).map((item) => primitive(item, type, numbers));
+  return trimmed === ''
+    ? []
+    : trimmed.split(XML_SPACE).map((item) => primitive(item, holder.type, numbers, holder.binary));
+}
+/** The text of an element as one typed holder: a single text node as it is, several joined. */
+function textOf(texts: readonly InstanceText[]): Typed {
+  const [first] = texts;
+  if (texts.length === 1 && first) {
+    return first;
+  }
+  const value = texts.map((part) => part.value).join('');
+  return {
+    value,
+    type: first?.type ?? 'string',
+    ...(first?.list ? { list: true } : {}),
+    ...(first?.binary ? { binary: first.binary } : {}),
+  };
 }
 /** Attributes that become JSON properties: xsi:* control the instance and are never data. */
 function dataAttributes(node: InstanceElement): InstanceAttribute[] {
@@ -93,15 +194,25 @@ export function toJson(
     return JSON.parse(JSON.stringify(root)) as JsonValue;
   }
   const textProperty = options.textProperty ?? 'value';
-  if (!textProperty) {
-    throw new TypeError('textProperty must not be empty');
-  }
+  checkTextProperty(textProperty);
   let plan: NamespacePlan | undefined;
+  // The text property's name is reserved in every object, whether it holds text or not: an attribute of that name
+  // becomes `@local`, an element `{ns}local`.
+  const attributeKey = (attribute: InstanceAttribute): string =>
+    attribute.key ?? (attribute.name === textProperty ? `@${attribute.name}` : attribute.name);
+  const elementKey = (element: InstanceElement): string =>
+    element.key ?? (element.name === textProperty ? `{${element.ns}}${element.name}` : element.name);
   type JsonObject = { [key: string]: JsonValue };
   type Put = (name: string, identity: string, value: JsonValue) => void;
-  const object = (owner: string): { result: JsonObject; put: Put } => {
+  const object = (
+    owner: string,
+  ): { result: JsonObject; put: Put; reserve: (name: string, identity: string) => void } => {
     const result = Object.create(null) as JsonObject;
     const names = new Map<string, string>();
+    /** Keeps a key free that this object could hold, so that nothing else takes it. */
+    const reserve = (name: string, identity: string) => {
+      names.set(name, identity);
+    };
     const put: Put = (name, identity, value) => {
       if (names.has(name)) {
         throw new JsonMappingError(
@@ -111,23 +222,20 @@ export function toJson(
       names.set(name, identity);
       Object.defineProperty(result, name, { value, enumerable: true, writable: true, configurable: true });
     };
-    return { result, put };
+    return { result, put, reserve };
   };
   /** Writes elements into one object; each repeated group at this level is an array with an object per occurrence. */
   const writeElements = (owner: string, put: Put, members: readonly InstanceElement[], level: number): void => {
     const properties = new Map<string, InstanceElement[]>();
     for (const child of members) {
       const group = child.groups?.[level];
-      const key = group?.key ?? child.name;
+      const key = group?.key ?? elementKey(child);
       const list = properties.get(key) ?? [];
       if (!group && list.some((item) => item.ns !== child.ns)) {
         throw new JsonMappingError(`namespace collision at ${owner}/${child.name}; use mode: 'tree'`);
       }
-      // Content of xs:any never shares a property with a declared element, nor takes the text property.
-      if (
-        !group &&
-        (list.some((item) => !item.wildcard !== !child.wildcard) || (child.wildcard && key === textProperty))
-      ) {
+      // Content of xs:any never shares a property with a declared element.
+      if (!group && list.some((item) => !item.wildcard !== !child.wildcard)) {
         throw new JsonMappingError(
           `property collision at ${owner}/${child.name}: wildcard content and a declared name; use mode: 'tree'`,
         );
@@ -179,15 +287,8 @@ export function toJson(
       return content;
     }
     const { result, put } = object(node.name);
-    const name = (local: string, identity: string): string => {
-      if (local === textProperty) {
-        throw new JsonMappingError(`property collision at ${node.name}/${local}: ${identity} and the text property`);
-      }
-      return local;
-    };
     for (const attribute of attributes) {
-      const identity = `attribute {${attribute.ns}}${attribute.name}`;
-      put(name(attribute.name, identity), identity, attribute.value);
+      put(attributeKey(attribute), `attribute {${attribute.ns}}${attribute.name}`, attribute.value);
     }
     if (children.length > 0 && /[^ \t\n\r]/.test(content)) {
       plan ??= planNamespaces(root, prefixes);
@@ -204,10 +305,11 @@ export function toJson(
       byName.set(child.name, list);
     }
     for (const [local, list] of byName) {
-      const identity = `element {${list[0]?.ns ?? ''}}${local}`;
-      put(name(local, identity), identity, list.length > 1 ? list.map(generic) : generic(list[0] ?? node));
+      const first = list[0] ?? node;
+      put(elementKey(first), `element {${first.ns}}${local}`, list.length > 1 ? list.map(generic) : generic(first));
     }
-    if (children.length === 0 && texts.length > 0) {
+    // Without children, the text is the text property where it is not empty; attributes alone stay alone.
+    if (children.length === 0 && content !== '') {
       put(textProperty, 'text', content);
     }
     return result;
@@ -228,6 +330,10 @@ export function toJson(
     if (node.nil && attributes.length === 0 && !type) {
       return null;
     }
+    // An element of xs:anyType without xsi:type is mapped like wildcard content; empty, it is "".
+    if (node.anyType && !type && !node.nil) {
+      return generic(node);
+    }
     if (
       !type &&
       !node.nil &&
@@ -237,19 +343,17 @@ export function toJson(
       children.length === 0 &&
       texts.length > 0
     ) {
-      const first = texts[0];
-      return typed(texts.map((part) => part.value).join(''), first?.type ?? 'string', first?.list, options.numbers);
+      return typed(textOf(texts), options.numbers);
     }
-    const { result, put } = object(node.name);
+    const { result, put, reserve } = object(node.name);
+    // The key #type belongs to xsi:type wherever the type has alternatives, used in this sample or not.
     if (type) {
       put('#type', 'xsi:type', type);
+    } else if (node.typeable) {
+      reserve('#type', 'xsi:type');
     }
     for (const attribute of attributes) {
-      put(
-        attribute.name,
-        `attribute {${attribute.ns}}${attribute.name}`,
-        typed(attribute.value, attribute.type, attribute.list, options.numbers),
-      );
+      put(attributeKey(attribute), `attribute {${attribute.ns}}${attribute.name}`, typed(attribute, options.numbers));
     }
     if (node.nil) {
       // A nil element with attributes: the attributes and a null text property, never children.
@@ -259,13 +363,11 @@ export function toJson(
       put(textProperty, 'mixed content', serializeMixed(node, plan));
     } else {
       writeElements(node.name, put, children, 0);
+      // Simple content always has its text property, empty as "".
       if (texts.length > 0) {
-        const first = texts[0];
-        put(
-          textProperty,
-          'simple content',
-          typed(texts.map((part) => part.value).join(''), first?.type ?? 'string', first?.list, options.numbers),
-        );
+        put(textProperty, 'simple content', typed(textOf(texts), options.numbers));
+      } else if (node.simpleContent) {
+        put(textProperty, 'simple content', '');
       }
     }
     return result;

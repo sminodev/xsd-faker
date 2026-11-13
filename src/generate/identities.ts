@@ -6,6 +6,7 @@ import type { Rng } from '../rng.js';
 import { checkValue } from '../values/check.js';
 import { generateValue } from '../values/generate.js';
 import type { Facets } from '../xsd/facets.js';
+import { splitXmlSpace, trimXmlSpace } from '../xml/space.js';
 
 export type IdentityKind = 'id' | 'idref' | 'idrefs';
 
@@ -45,7 +46,6 @@ export function identityKind(facets: Facets): IdentityKind | 'unplanned' | undef
 }
 
 const ATTEMPTS = 10;
-const items = (value: string): string[] => value.split(/[ \t\n\r]+/).filter((item) => item !== '');
 
 /** The facets of two types at once: all patterns, the tighter lengths, the common enumerated values. */
 function both(a: Facets, b: Facets): Facets {
@@ -75,7 +75,7 @@ export function planIdentities(slots: readonly IdentitySlot[], rng: Rng): void {
   const owners = new Map<string, IdentitySlot>();
   // Fixed and supplied IDs first, so that a generated duplicate yields to them.
   for (const slot of [...ids.filter((s) => !s.adjustable), ...ids.filter((s) => s.adjustable)]) {
-    let value = slot.get().trim();
+    let value = trimXmlSpace(slot.get());
     if (owners.has(value) && slot.adjustable) {
       const fresh = unique(slot.facets, rng, owners);
       if (fresh !== undefined) {
@@ -154,13 +154,13 @@ export function checkIdentities(slots: readonly IdentitySlot[]): string[] {
   const live = slots.filter((slot) => slot.validated);
   const ids = new Map<string, string>();
   for (const slot of live.filter((s) => s.kind === 'id')) {
-    const value = slot.get().trim();
+    const value = trimXmlSpace(slot.get());
     const first = ids.get(value);
     if (first !== undefined) problems.push(`ID "${value}" at ${slot.path} is already used at ${first}`);
     else ids.set(value, slot.path);
   }
   for (const slot of live.filter((s) => s.kind !== 'id')) {
-    const values = slot.kind === 'idref' ? [slot.get().trim()] : items(slot.get());
+    const values = slot.kind === 'idref' ? [trimXmlSpace(slot.get())] : splitXmlSpace(slot.get());
     for (const value of values) {
       if (!ids.has(value)) problems.push(`reference "${value}" at ${slot.path} names no ID of the document`);
     }

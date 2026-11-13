@@ -5,6 +5,7 @@
 
 import type { Element } from '@xmldom/xmldom';
 import { attr, clark, type Component, type QName, type SchemaSet, XS, xsChild, xsChildren } from '../xsd/schema-set.js';
+import { splitXmlSpace } from '../xml/space.js';
 
 type Method = 'extension' | 'restriction' | 'substitution';
 
@@ -46,7 +47,7 @@ export const isAbstract = (node: Element): boolean => ['true', '1'].includes(att
 
 /** The head of a declaration's substitution group, if it names one that exists. */
 function headOf(set: SchemaSet, decl: Element): Component | undefined {
-  const name = (attr(decl, 'substitutionGroup') ?? '').trim().split(/\s+/)[0];
+  const name = splitXmlSpace(attr(decl, 'substitutionGroup') ?? '')[0];
   return name ? set.lookup('element', set.resolveQName(decl, name)) : undefined;
 }
 
@@ -114,7 +115,7 @@ function derivation(set: SchemaSet, type: TypeRef, ancestor: TypeRef): Step[] | 
 
 /** A block or final value as a set of methods; `#all` means all of them. */
 function methods(value: string | undefined): Set<Method> {
-  const words = (value ?? '').trim().split(/\s+/);
+  const words = splitXmlSpace(value ?? '');
   return new Set(
     words.includes('#all')
       ? ['extension', 'restriction', 'substitution']
@@ -201,4 +202,55 @@ export function typeCandidates(set: SchemaSet, decl: Element, type: Component): 
 /** `{namespace}local` of a global declaration or type definition. */
 export function expandedName(component: Component): string {
   return clark(component.doc.targetNamespace, attr(component.node, 'name') ?? '');
+}
+
+/** How often a particle occurs at least. */
+const minimum = (node: Element): number => Number(attr(node, 'minOccurs') ?? '1');
+const maximum = (node: Element): number => {
+  const max = attr(node, 'maxOccurs');
+  return max === undefined ? 1 : max === 'unbounded' ? Infinity : Number(max);
+};
+
+/**
+ * Whether no instance of a declaration can be written: its declared complex type is abstract and no type derived from
+ * it is allowed. Such an element without xsi:type is invalid.
+ */
+export function declarationUnavailable(set: SchemaSet, decl: Element): boolean {
+  const declared = declaredType(set, decl);
+  if (declared.kind !== 'named' || declared.qname.ns === XS) return false;
+  const complex = set.lookup('complexType', declared.qname);
+  return complex !== undefined && typeCandidates(set, decl, complex).length === 0;
+}
+
+/**
+ * Whether a particle that has to occur cannot be generated: a required element of an unavailable declaration, a
+ * reference to an abstract head without an allowed member, or a group that requires one, or a choice of which every
+ * branch is unavailable. Optional particles are always available, since they can be left out.
+ */
+export function particleUnavailable(set: SchemaSet, particle: Element, seen = new Set<Element>()): boolean {
+  if (minimum(particle) === 0 || seen.has(particle)) return false;
+  seen.add(particle);
+  switch (particle.localName) {
+    case 'element': {
+      const ref = attr(particle, 'ref');
+      if (ref === undefined) return declarationUnavailable(set, particle);
+      const head = set.lookup('element', set.resolveQName(particle, ref));
+      if (!head) return false;
+      const members = substitutionCandidates(set, head);
+      return members.every((member) => declarationUnavailable(set, member.node));
+    }
+    case 'sequence':
+    case 'all':
+      return xsChildren(particle).some((child) => particleUnavailable(set, child, seen));
+    case 'choice': {
+      const branches = xsChildren(particle).filter((child) => maximum(child) > 0);
+      return branches.length > 0 && branches.every((child) => particleUnavailable(set, child, seen));
+    }
+    case 'group': {
+      const group = set.reference('group', particle);
+      return group !== undefined && xsChildren(group.node).some((child) => particleUnavailable(set, child, seen));
+    }
+    default:
+      return false;
+  }
 }

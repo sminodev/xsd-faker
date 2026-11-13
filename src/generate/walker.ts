@@ -6,6 +6,7 @@
 
 import type { Element } from '@xmldom/xmldom';
 import type { Rng } from '../rng.js';
+import { binaryKind, settledValue } from '../values/check.js';
 import type { ValueSource } from '../values/source.js';
 import { generateValue } from '../values/generate.js';
 import {
@@ -14,11 +15,20 @@ import {
   type InstanceAttribute,
   type InstanceElement,
   type InstanceNode,
+  type InstanceText,
   text,
 } from '../xml/tree.js';
 import { enumerationScope, FacetReader, type Facets, holdsQNames, jsonFormOf } from '../xsd/facets.js';
 import type { Problems } from '../xsd/problems.js';
-import { declaredType, expandedName, isAbstract, substitutionCandidates, typeCandidates } from './alternatives.js';
+import {
+  declarationUnavailable,
+  declaredType,
+  expandedName,
+  isAbstract,
+  particleUnavailable,
+  substitutionCandidates,
+  typeCandidates,
+} from './alternatives.js';
 import { checkIdentities, type IdentitySlot, identityKind, planIdentities } from './identities.js';
 import {
   attr,
@@ -30,6 +40,7 @@ import {
   xsChild,
   xsChildren,
 } from '../xsd/schema-set.js';
+import { splitXmlSpace } from '../xml/space.js';
 
 export type OptionalMode = 'none' | 'all' | 'random';
 /** Whether nillable elements may be written with xsi:nil="true". */
@@ -186,6 +197,10 @@ interface ObjectScope {
   elements: Map<string, number>;
   /** the local names of declared elements and attributes; content admitted by xs:any must not take them */
   names: Set<string>;
+  /** the JSON key of each element whose local name several namespaces declare: `{ns}local`, by expanded name */
+  elementKeys: Map<string, string>;
+  /** the namespace of each local name that wildcard content in this object already uses */
+  wildcards: Map<string, string>;
 }
 
 /** Where a particle writes: its JSON object and the repeated group occurrences around it. */
@@ -195,6 +210,9 @@ interface Place {
 }
 
 const MODEL_GROUPS = ['sequence', 'choice', 'all', 'group'];
+const XSI = 'http://www.w3.org/2001/XMLSchema-instance';
+/** The namespace of a prefix that a generated QName value uses and the schema does not bind, followed by the prefix. */
+const VALUE_PREFIX_NS = 'urn:example:prefix:';
 /** Required content nested deeper than maxDepth + this is reported instead of generated. */
 const DEPTH_RESERVE = 25;
 
@@ -221,6 +239,8 @@ export class Walker {
   private skipped = 0;
   /** where IDs and references are written, planned once the tree is complete */
   private readonly identities: IdentitySlot[] = [];
+  /** the simple values of the document with their types, described once identities are planned */
+  private readonly written: { facets: Facets; holder: InstanceText | InstanceAttribute }[] = [];
   readonly choices: ChoiceVisit[] = [];
   private readonly settings: ChoiceSettings;
 
@@ -245,6 +265,12 @@ export class Walker {
       planIdentities(this.identities, this.options.rng);
       // Only this check, never a validator's verdict, clears references: libxml2 does not resolve them.
       for (const message of checkIdentities(this.identities)) this.problems.error('identity-planning', message);
+    }
+    for (const { facets, holder } of this.written) {
+      const normalized = settledValue(facets, holder.value);
+      if (normalized !== holder.value) holder.normalized = normalized;
+      const binary = binaryKind(facets, holder.value);
+      if (binary) holder.binary = binary;
     }
     return tree;
   }
@@ -326,8 +352,8 @@ export class Walker {
         // A nil element of a simple type has neither text nor attributes.
       } else if (!(qname.ns === XS && qname.local === 'anyType')) {
         this.simpleText(out, this.facets.read(qname, declared.from), here, fixed, decl);
-      } else if (fixed !== undefined) {
-        out.children = [text(fixed)];
+      } else {
+        this.anyType(out, fixed);
       }
     } else if (declared.kind === 'anonymous' && declared.node.localName === 'complexType') {
       this.complex(out, declared.node, this.set.documentOf(declared.node) ?? declDoc, here, depth, fixed, decl);
@@ -335,10 +361,16 @@ export class Walker {
       // as above
     } else if (declared.kind === 'anonymous') {
       this.simpleText(out, this.facets.read(declared.node), here, fixed, decl);
-    } else if (fixed !== undefined) {
-      out.children = [text(fixed)];
+    } else {
+      this.anyType(out, fixed);
     }
     return out;
+  }
+
+  /** An element of xs:anyType, declared or for want of a type: empty, or its value constraint as text. */
+  private anyType(out: InstanceElement, fixed: string | undefined): void {
+    out.anyType = true;
+    if (fixed !== undefined) out.children = [text(fixed)];
   }
 
   /**
@@ -361,6 +393,7 @@ export class Walker {
       );
       return undefined;
     }
+    if (candidates.length > 1) out.typeable = true;
     const index = candidates.length === 1 ? 0 : this.decide('type', decl, candidates, path, depth);
     const chosen = candidates[index] ?? declared;
     if (chosen.node !== declared.node) {
@@ -411,10 +444,12 @@ export class Walker {
   ): void {
     this.identityBoundary(facets);
     const value = fixed ?? this.value(facets, path, 'element');
-    this.bindPrefixes(out, facets, value, fixed === undefined ? (enumerationScope(facets, value) ?? decl) : decl);
+    const scope = fixed === undefined ? (enumerationScope(facets, value) ?? decl) : decl;
+    this.bindPrefixes(out, facets, value, scope, fixed === undefined);
     const form = jsonFormOf(facets);
     const node = text(value, form.type, form.list);
     out.children = [node];
+    this.written.push({ facets, holder: node });
     this.identity(facets, path, 'element', fixed !== undefined, {
       get: () => node.value,
       set: (v) => {
@@ -423,12 +458,19 @@ export class Walker {
     });
   }
 
-  /** The prefixes in a QName value need a declaration in the document; the schema says what they stand for. */
-  private bindPrefixes(out: InstanceElement, facets: Facets, value: string, scope: Element): void {
+  /**
+   * The prefixes in a QName value need a declaration in the document; the schema says what they stand for. A
+   * generated value, from a pattern for example, may use a prefix the schema does not bind: any namespace makes it a
+   * QName, so `xsi` gets its own and every other prefix one of its own.
+   */
+  private bindPrefixes(out: InstanceElement, facets: Facets, value: string, scope: Element, generated: boolean): void {
     if (!holdsQNames(facets)) return;
-    for (const token of value.trim().split(/\s+/)) {
+    for (const token of splitXmlSpace(value)) {
       const prefix = token.slice(0, Math.max(token.indexOf(':'), 0));
-      const ns = prefix !== '' && prefix !== 'xml' ? scope.lookupNamespaceURI(prefix) : null;
+      if (prefix === '' || prefix === 'xml') continue;
+      const ns =
+        scope.lookupNamespaceURI(prefix) ??
+        (!generated ? null : prefix === 'xsi' ? XSI : `${VALUE_PREFIX_NS}${prefix}`);
       if (ns) out.valueNamespaces = { ...out.valueNamespaces, [prefix]: ns };
     }
   }
@@ -490,7 +532,14 @@ export class Walker {
     decl: Element,
   ): void {
     const plan = this.plan(typeNode, doc);
+    const scope = this.objectScope(plan.groups, plan.attributes);
     out.attributes = this.attributes(out, plan.attributes, path, depth);
+    // Mixed content keeps its elements in the text property, so no attribute key can meet them.
+    const keys = attributeKeys(plan.attributes, plan.mixed ? new Map() : scope.elements);
+    for (const attribute of out.attributes) {
+      const key = keys.get(clark(attribute.ns, attribute.name));
+      if (key !== undefined) attribute.key = key;
+    }
     if (out.nil) {
       // Attributes stay as the type declares them; content is not allowed.
       return;
@@ -512,7 +561,7 @@ export class Walker {
         text(`${generateValue({ builtin: 'string', variety: 'atomic', patterns: [] }, this.options.rng) ?? 'Text'} `),
       );
     }
-    const place = { scope: this.objectScope(plan.groups, plan.attributes), trail: [] };
+    const place = { scope, trail: [] };
     for (const group of plan.groups) {
       this.particle(group.node, group.doc, path, depth, children, new Set(), place);
     }
@@ -525,10 +574,20 @@ export class Walker {
     models: readonly { node: Element; doc: SchemaDocument }[],
     attributes: ReadonlyMap<string, AttributeUse> = new Map(),
   ): ObjectScope {
-    const scope: ObjectScope = { keys: new Map(), groupNames: new Map(), elements: new Map(), names: new Set() };
+    const scope: ObjectScope = {
+      keys: new Map(),
+      groupNames: new Map(),
+      elements: new Map(),
+      names: new Set(),
+      elementKeys: new Map(),
+      wildcards: new Map(),
+    };
     for (const { node, doc } of models) this.declare(node, doc, scope, new Set());
-    for (const key of [...scope.elements.keys(), ...attributes.keys()])
-      scope.names.add(key.slice(key.indexOf('}') + 1));
+    for (const key of [...scope.elements.keys(), ...attributes.keys()]) scope.names.add(localOf(key));
+    // A local name of several namespaces is a collision: every one of them takes its expanded name.
+    for (const names of byLocalName(scope.elements.keys()).values()) {
+      if (names.length > 1) for (const name of names) scope.elementKeys.set(name, name);
+    }
     return scope;
   }
 
@@ -579,7 +638,6 @@ export class Walker {
     return () => ({ scope, trail: [...place.trail, { key, occurrence: (this.occurrences += 1) }] });
   }
 
-  /** Records where a generated element went, for the JSON serializer. */
   /**
    * The declarations that may occur for an element particle that refers to the head of a substitution group: the
    * head unless abstract, and the allowed members. Undefined for a particle without alternatives.
@@ -588,12 +646,18 @@ export class Walker {
     const ref = attr(particle, 'ref');
     const head = ref === undefined ? undefined : this.set.lookup('element', this.set.resolveQName(particle, ref));
     if (!head) return undefined;
-    const candidates = substitutionCandidates(this.set, head);
+    const all = substitutionCandidates(this.set, head);
+    // A member that cannot be generated is not offered, unless no other is left.
+    const available = all.filter((c) => !declarationUnavailable(this.set, c.node));
+    const candidates = available.length > 0 ? available : all;
     return candidates.length === 1 && candidates[0]?.node === head.node ? undefined : candidates;
   }
 
   private placed(child: InstanceElement, max: number, place: Place): void {
-    child.repeatable = max > 1 || (place.scope.elements.get(clark(child.ns, child.name)) ?? 0) > 1;
+    const name = clark(child.ns, child.name);
+    child.repeatable = max > 1 || (place.scope.elements.get(name) ?? 0) > 1;
+    const key = place.scope.elementKeys.get(name);
+    if (key !== undefined) child.key = key;
     if (place.trail.length > 0) child.groups = [...place.trail];
   }
 
@@ -641,12 +705,15 @@ export class Walker {
     const own = xsChildren(owner).find((c) => MODEL_GROUPS.includes(c.localName ?? ''));
     const groups = own ? [{ node: own, doc }] : [];
     const extension = derivation?.localName === 'extension';
+    // mixed on complexContent wins over mixed on the type. An extension that says nothing keeps the mixed content of
+    // its base, as libxml2 does.
+    const flag = (value: string | undefined) =>
+      value === 'true' || value === '1' ? true : value === 'false' || value === '0' ? false : undefined;
+    const declared = flag(complexContent && attr(complexContent, 'mixed')) ?? flag(attr(typeNode, 'mixed'));
     return {
       groups: extension ? [...base.groups, ...groups] : groups,
       attributes,
-      mixed:
-        attr(typeNode, 'mixed') === 'true' ||
-        (complexContent !== undefined && attr(complexContent, 'mixed') === 'true'),
+      mixed: declared ?? (extension && base.mixed),
     };
   }
 
@@ -724,10 +791,11 @@ export class Walker {
       const value = fixed ?? this.value(facets, [...path, name], 'attribute');
       const constrained = attr(use.node, 'fixed') !== undefined || attr(use.node, 'default') !== undefined;
       const scope = fixed === undefined ? (enumerationScope(facets, value) ?? decl) : constrained ? use.node : decl;
-      this.bindPrefixes(owner, facets, value, scope);
+      this.bindPrefixes(owner, facets, value, scope, fixed === undefined);
       const form = jsonFormOf(facets);
       const attribute: InstanceAttribute = { ns, name, value, type: form.type, ...(form.list ? { list: true } : {}) };
       out.push(attribute);
+      this.written.push({ facets, holder: attribute });
       this.identity(facets, [...path, name], 'attribute', fixed !== undefined, {
         get: () => attribute.value,
         set: (v) => {
@@ -828,7 +896,10 @@ export class Walker {
         return;
       }
       case 'choice': {
-        const branches = xsChildren(node).filter((c) => occurs(c).max > 0);
+        // A branch that cannot be generated is not offered, unless no other is left.
+        const possible = xsChildren(node).filter((c) => occurs(c).max > 0);
+        const available = possible.filter((c) => !particleUnavailable(this.set, c));
+        const branches = available.length > 0 ? available : possible;
         const enter = this.entering(node, max, place, branches, doc);
         for (let k = 0; k < times && branches.length > 0; k += 1) {
           const index = this.ask({ node, branches, path, depth, kind: 'choice' });
@@ -864,7 +935,7 @@ export class Walker {
       }
       case 'any':
         for (let k = 0; k < times; k += 1) {
-          const child = this.wildcard(node, doc, path, depth + 1, place.scope.names);
+          const child = this.wildcard(node, doc, path, depth + 1, place.scope);
           if (child) {
             this.placed(child, max, place);
             out.push(child);
@@ -879,16 +950,22 @@ export class Walker {
   /**
    * An element for xs:any: a global element of an allowed namespace if the schema has one; otherwise, unless the
    * wildcard is strict, an element of our own in an allowed namespace. Names declared in the same JSON object are
-   * left out, because the schemaless JSON mapping of wildcard content would collide with them.
+   * left out, because the schemaless JSON mapping of wildcard content would collide with them, and so are names that
+   * wildcard content of another namespace already uses there.
    */
   private wildcard(
     node: Element,
     doc: SchemaDocument,
     path: readonly string[],
     depth: number,
-    declared: ReadonlySet<string>,
+    scope: ObjectScope,
   ): InstanceElement | undefined {
-    const spec = (attr(node, 'namespace') ?? '##any').trim().split(/\s+/);
+    const free = (local: string, ns: string) => !scope.names.has(local) && (scope.wildcards.get(local) ?? ns) === ns;
+    const used = (out: InstanceElement | undefined) => {
+      if (out) scope.wildcards.set(out.name, out.ns);
+      return out;
+    };
+    const spec = splitXmlSpace(attr(node, 'namespace') ?? '##any');
     const allowed = (ns: string) =>
       spec.some(
         (s) =>
@@ -903,7 +980,7 @@ export class Walker {
         allowed(c.doc.targetNamespace) &&
         !isAbstract(c.node) &&
         !path.includes(attr(c.node, 'name') ?? '') &&
-        !declared.has(attr(c.node, 'name') ?? ''),
+        free(attr(c.node, 'name') ?? '', c.doc.targetNamespace),
     );
     if (candidates.length > 0) {
       const chosen = this.options.rng.pick(candidates);
@@ -913,7 +990,7 @@ export class Walker {
       try {
         const out = this.element(chosen.node, chosen.doc, path, depth, true);
         if (out) out.wildcard = true;
-        return out;
+        return used(out);
       } finally {
         this.schemaless -= 1;
         this.skipped -= skip;
@@ -937,10 +1014,10 @@ export class Walker {
             ? 'urn:xsd-faker:any'
             : first;
     let name = 'any';
-    for (let n = 2; declared.has(name); n += 1) name = `any${n}`;
+    for (let n = 2; !free(name, ns); n += 1) name = `any${n}`;
     const out = element(ns, name, { children: [text('any content')] });
     out.wildcard = true;
-    return out;
+    return used(out);
   }
 }
 
@@ -948,6 +1025,40 @@ export class Walker {
  * The JSON property of a repeated group: `#sequence`, `#choice`, or `#` and the name of a referenced group; a further
  * group of the same name adds `:2`, `:3`. The same group reached twice shares its property.
  */
+/** The local name of an expanded name `{ns}local`. */
+function localOf(name: string): string {
+  return name.slice(name.indexOf('}') + 1);
+}
+
+/** Expanded names grouped by local name. */
+function byLocalName(names: Iterable<string>): Map<string, string[]> {
+  const out = new Map<string, string[]>();
+  for (const name of names) {
+    const local = localOf(name);
+    out.set(local, [...(out.get(local) ?? []), name]);
+  }
+  return out;
+}
+
+/**
+ * The JSON keys of attributes that collide, planned from the type: a local name of several attribute namespaces
+ * gives each `@{ns}local`, an attribute named like an element `@local`; the element keeps its name.
+ */
+function attributeKeys(
+  attributes: ReadonlyMap<string, unknown>,
+  elements: ReadonlyMap<string, unknown>,
+): Map<string, string> {
+  const elementNames = new Set([...elements.keys()].map(localOf));
+  const out = new Map<string, string>();
+  for (const [local, names] of byLocalName(attributes.keys())) {
+    for (const name of names) {
+      if (names.length > 1) out.set(name, `@${name}`);
+      else if (elementNames.has(local)) out.set(name, `@${local}`);
+    }
+  }
+  return out;
+}
+
 function claimGroupKey(scope: ObjectScope, group: Element, name: string): void {
   if (scope.keys.has(group)) return;
   const count = (scope.groupNames.get(name) ?? 0) + 1;

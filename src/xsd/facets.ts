@@ -6,6 +6,7 @@ import { compareDecimal } from '../values/decimal.js';
 import type { Element } from '@xmldom/xmldom';
 import type { At, Problems } from './problems.js';
 import { attr, type QName, type SchemaSet, XS, xsChild, xsChildren } from './schema-set.js';
+import { splitXmlSpace, trimXmlSpace } from '../xml/space.js';
 
 export interface Bound {
   /** Original bound, retained for exact decimal and large-integer arithmetic. */
@@ -65,6 +66,22 @@ export const INTEGERS: Readonly<Record<string, { min?: number; max?: number }>> 
 };
 
 const NUMBERS = ['decimal', 'float', 'double'];
+
+/**
+ * The value of a literal of xs:float or xs:double: the nearest 32-bit float or double, INF and -INF past the
+ * largest finite one. `1e39` is INF as an xs:float, `1e-50` is 0.
+ */
+export function binaryValue(builtin: 'float' | 'double', text: string): number {
+  const t = text.trim();
+  const number = t === 'INF' ? Infinity : t === '-INF' ? -Infinity : t === 'NaN' ? NaN : Number(t);
+  return builtin === 'float' ? Math.fround(number) : number;
+}
+
+/** The largest finite value of xs:float and xs:double, as a bound. */
+export const FINITE: Readonly<Record<'float' | 'double', Bound>> = {
+  float: { value: 3.4028234663852886e38, lexical: '3.4028234663852886e38', exclusive: false },
+  double: { value: Number.MAX_VALUE, lexical: '1.7976931348623157e308', exclusive: false },
+};
 /** Built-in list types and their item types; their length facets count items. */
 const LISTS: Readonly<Record<string, string>> = { NMTOKENS: 'NMTOKEN', IDREFS: 'IDREF', ENTITIES: 'ENTITY' };
 const OTHER_BUILTINS = [
@@ -233,10 +250,9 @@ export class FacetReader {
     }
     const union = xsChild(type, 'union');
     if (union) {
-      const named = (attr(union, 'memberTypes') ?? '')
-        .split(/\s+/)
-        .filter((q) => q.length > 0)
-        .map((q) => this.read(this.set.resolveQName(union, q), union, new Set(seen)));
+      const named = splitXmlSpace(attr(union, 'memberTypes') ?? '').map((q) =>
+        this.read(this.set.resolveQName(union, q), union, new Set(seen)),
+      );
       const inner = xsChildren(union)
         .filter((c) => c.localName === 'simpleType')
         .map((c) => this.read(c, union, new Set(seen)));
@@ -306,7 +322,7 @@ export class FacetReader {
       case 'maxLength':
       case 'totalDigits':
       case 'fractionDigits':
-        if (!/^\s*\+?[0-9]+\s*$/.test(value) || (name === 'totalDigits' && count === 0)) {
+        if (!/^[ \t\n\r]*\+?[0-9]+[ \t\n\r]*$/.test(value) || (name === 'totalDigits' && count === 0)) {
           this.problems.error(
             'invalid-facet',
             `${name} needs a ${name === 'totalDigits' ? 'positive' : 'non-negative'} integer, not "${value}"`,
@@ -335,16 +351,25 @@ export class FacetReader {
           this.problems.warning('unsupported', `${name} on xs:${facets.builtin} is not supported`, this.at(node));
           return;
         }
-        const bound = Number(value.trim());
-        if (value.trim() === '' || !Number.isFinite(bound)) {
+        const lexical = trimXmlSpace(value);
+        const bound = Number(lexical);
+        if (['INF', '-INF', 'NaN'].includes(lexical)) {
+          this.problems.error(
+            'unsupported',
+            `${name} ${lexical} on xs:${facets.builtin} is not supported`,
+            this.at(node),
+          );
+          return;
+        }
+        if (lexical === '' || !Number.isFinite(bound) || /[^0-9+\-.eE]/.test(lexical)) {
           this.problems.error('invalid-facet', `${name} needs a number, not "${value}"`, this.at(node));
           return;
         }
         const exclusive = name.endsWith('Exclusive');
         if (name.startsWith('min')) {
-          facets.min = tighter(facets.min, { value: bound, lexical: value.trim(), exclusive }, true);
+          facets.min = tighter(facets.min, { value: bound, lexical, exclusive }, true);
         } else {
-          facets.max = tighter(facets.max, { value: bound, lexical: value.trim(), exclusive }, false);
+          facets.max = tighter(facets.max, { value: bound, lexical, exclusive }, false);
         }
         return;
       }

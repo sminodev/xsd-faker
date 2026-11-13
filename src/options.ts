@@ -1,4 +1,5 @@
 import type { GenerateOptions } from './index.js';
+import { checkTextProperty } from './json/serialize.js';
 import { effectiveLimits } from './xsd/schema-set.js';
 function integer(name: string, value: number | undefined, min: number, max: number): void {
   if (value !== undefined && (!Number.isSafeInteger(value) || value < min || value > max)) {
@@ -40,6 +41,9 @@ export function checkOptions(options: GenerateOptions): void {
   }
   if (options.json && options.json.mode !== undefined && !['compact', 'tree'].includes(options.json.mode)) {
     throw new TypeError('json.mode must be compact or tree');
+  }
+  if (options.json && options.json.textProperty !== undefined) {
+    checkTextProperty(options.json.textProperty);
   }
   if (options.json && options.json.numbers !== undefined && !['number', 'string'].includes(options.json.numbers)) {
     throw new TypeError('json.numbers must be number or string');

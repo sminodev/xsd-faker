@@ -4,9 +4,9 @@
 import { RegexSyntaxError } from '../regex/parse.js';
 import { stringFromPattern, UngeneratableError } from '../regex/generate.js';
 import type { Rng } from '../rng.js';
-import { type Facets, INTEGERS, isNumeric } from '../xsd/facets.js';
+import { binaryValue, type Facets, FINITE, INTEGERS, isNumeric } from '../xsd/facets.js';
 import { boundUnits, decimalParts } from './decimal.js';
-import { checkValue, normalizeSpace } from './check.js';
+import { checkValue, settledValue } from './check.js';
 import { lexicalRegExp } from './lexical.js';
 
 const ATTEMPTS = 100;
@@ -29,21 +29,12 @@ export function generateValue(facets: Facets, rng: Rng): string | undefined {
   for (let attempt = 0; attempt < ATTEMPTS; attempt += 1) {
     const raw = candidate(facets, rng);
     // The value as the validator reads it, so that XML and JSON carry the same value.
-    const value = raw === undefined ? undefined : settled(facets, normalizeSpace(facets, raw));
+    const value = raw === undefined ? undefined : settledValue(facets, raw);
     if (value !== undefined && checkValue(facets, value) === undefined) {
       return value;
     }
   }
   return undefined;
-}
-
-/** A union value in the form the member that accepts it reads; unions have no whiteSpace rule of their own. */
-function settled(facets: Facets, value: string): string {
-  if (facets.variety !== 'union') {
-    return value;
-  }
-  const member = (facets.members ?? []).find((m) => checkValue(m, value) === undefined);
-  return member ? settled(member, normalizeSpace(member, value)) : value;
 }
 
 /** One candidate; it may still break a facet. */
@@ -138,6 +129,19 @@ function bytes(rng: Rng, count: number): number[] {
 
 function builtinCandidate(facets: Facets, rng: Rng): string | undefined {
   const b = facets.builtin;
+  if (b === 'float' || b === 'double') {
+    // A bound that is INF or -INF as a value of the type, such as 1e39 for xs:float, leaves INF or -INF alone, or
+    // stops finite numbers at the largest finite value.
+    const of = (bound: { lexical?: string; value: number }) => binaryValue(b, bound.lexical ?? String(bound.value));
+    if (facets.min && of(facets.min) === Infinity) return 'INF';
+    if (facets.max && of(facets.max) === -Infinity) return '-INF';
+    const finite = { ...facets };
+    if (facets.max && of(facets.max) === Infinity) finite.max = FINITE[b];
+    if (facets.min && of(facets.min) === -Infinity) {
+      finite.min = { ...FINITE[b], value: -FINITE[b].value, lexical: `-${FINITE[b].lexical}` };
+    }
+    return numberCandidate(finite, rng);
+  }
   if (isNumeric(b)) {
     return numberCandidate(facets, rng);
   }
