@@ -42,6 +42,7 @@ import {
   xsChildren,
 } from '../xsd/schema-set.js';
 import { splitXmlSpace } from '../xml/space.js';
+import type { ExpandedPath, ExpandedStep } from '../mutate/path.js';
 
 export type OptionalMode = 'none' | 'all' | 'random';
 /** Whether nillable elements may be written with xsi:nil="true". */
@@ -120,6 +121,13 @@ export interface WalkOptions {
   /** Beyond this depth only required content is generated, so recursive types end. */
   maxDepth: number;
   values: ValueSource;
+  /**
+   * Paths the document has to contain: optional ancestors, branches, substitution group members and xsi:type
+   * alternatives along each path are taken, whatever the other settings say.
+   */
+  reach?: readonly ExpandedPath[];
+  /** Collects what the schema says about each node of the tree in `Walker.facts`, for planning changes to it. */
+  facts?: boolean;
   /** Whether the caller supplies the value at this place; such ID and IDREF values are checked, not replanned. */
   userSupplied?: (target: Pick<ValueContext, 'path' | 'kind' | 'typeName' | 'baseTypeNames'>) => boolean;
   rng: Rng;
@@ -188,6 +196,10 @@ interface ContentPlan {
   /** for simple content, the named types from this one down its derivation, the type itself first if it has a name */
   simpleTypes?: string[];
   mixed: boolean;
+  /** attributes the type or a restriction step prohibits */
+  prohibited: Set<string>;
+  /** the attribute wildcard of the type, if any */
+  anyAttribute?: { namespace: string[]; targetNamespace: string };
 }
 
 /** The named types of a value: its own, if it has a name, and those it derives from, nearest first. */
@@ -235,7 +247,92 @@ export interface ChoiceVisit {
   kind?: 'substitution' | 'type';
   /** the expanded name of each alternative, for substitution groups and xsi:type */
   alternatives?: string[];
+  /** a path of `reach` decided the branch, not the choice strategy */
+  fixed?: true;
 }
+
+/** Where a particle stands in the content model of its element. */
+export interface ParticleContext {
+  /** the model group directly around it */
+  compositor: 'sequence' | 'choice' | 'all' | 'none';
+  /** a model group around it may repeat */
+  repeated: boolean;
+  /** every model group around it has to occur */
+  required: boolean;
+}
+
+/** What the schema says about an element of the tree. */
+export interface ElementFacts {
+  kind: 'element';
+  decl: Element;
+  nillable: boolean;
+  /** the fixed value of the declaration */
+  fixed?: string;
+  /** the particle that wrote it, and how many elements that particle wrote at this place */
+  slot?: { min: number; max: number; count: number } & ParticleContext;
+  /** inside content admitted by a wildcard */
+  schemaless: boolean;
+  /** the content of an element of complex type */
+  content?: {
+    /** the expanded names of the attributes its type declares */
+    attributes: Set<string>;
+    /** attributes a restriction prohibits */
+    prohibited: Set<string>;
+    /** the namespaces of an attribute wildcard, with the target namespace they are read against */
+    anyAttribute?: { namespace: string[]; targetNamespace: string };
+    /** an element wildcard in the content model */
+    anyElement: boolean;
+    simple: boolean;
+    mixed: boolean;
+    /** the model groups of its content, in order */
+    models: { node: Element; doc: SchemaDocument }[];
+  };
+  /** the type it was declared with and the types xsi:type may name */
+  types?: { declared: Component; candidates: Component[] };
+  /** the choices of its content, with the children each one wrote */
+  choices: ChoiceOccurrence[];
+}
+
+/** One occurrence of a choice in the content of an element: its branch and its children, `first` to before `end`. */
+export interface ChoiceOccurrence {
+  node: Element;
+  doc: SchemaDocument;
+  branch: number;
+  branches: Element[];
+  first: number;
+  end: number;
+  context: ParticleContext;
+}
+
+/** What the schema says about a simple value: the text of an element or an attribute. */
+export interface ValueFacts {
+  kind: 'value';
+  facets: Facets;
+  /** the fixed value of the declaration or attribute use */
+  fixed?: string;
+  /** an attribute that has to be there */
+  required: boolean;
+  schemaless: boolean;
+  /** the fixed value belongs to an attribute use that refers to a global attribute */
+  fixedOnReference?: true;
+}
+
+const TOP: ParticleContext = { compositor: 'none', repeated: false, required: true };
+
+/** A path of `reach` on its way: `step` is the step the next element or attribute has to match. */
+interface Active {
+  path: ExpandedPath;
+  step: number;
+  /** the index of the path in `reach` */
+  index: number;
+}
+
+const stepMatches = (step: ExpandedStep | undefined, ns: string, name: string): boolean =>
+  step !== undefined && step.name === name && (step.ns === undefined || step.ns === ns);
+
+/** The elements of `out` that a step names, counted for its position. */
+const occurrencesOf = (step: ExpandedStep, out: readonly InstanceNode[]): number =>
+  out.filter((c) => c.kind === 'element' && stepMatches(step, c.ns, c.name)).length;
 
 /** A generation budget was exceeded, distinct from errors in user callbacks. */
 export class LimitError extends Error {}
@@ -257,6 +354,14 @@ export class Walker {
   /** the elements of complex type being written, outermost first */
   private readonly scopes: ValueScope[] = [];
   private instances = 0;
+  /** the paths of `reach` the document contains, by index */
+  private readonly reached = new Set<number>();
+  /** what the schema says about each node of the tree, with the `facts` option */
+  readonly facts = new Map<object, ElementFacts | ValueFacts>();
+  /** choice occurrences by the children array of the element they belong to, until that element is complete */
+  private readonly pendingChoices = new Map<InstanceNode[], ChoiceOccurrence[]>();
+  /** whether a particle can give an element of a step, by particle and step */
+  private readonly offered = new Map<Element, Map<string, boolean>>();
 
   constructor(
     private readonly set: SchemaSet,
@@ -274,7 +379,14 @@ export class Walker {
 
   /** The instance of a global element. */
   root(component: Component): InstanceElement {
-    const tree = this.element(component.node, component.doc, [], 0, true) ?? element('', '');
+    const reach = (this.options.reach ?? []).map((path, index) => ({ path, step: 0, index }));
+    const tree = this.element(component.node, component.doc, [], 0, true, reach) ?? element('', '');
+    (this.options.reach ?? []).forEach((path, index) => {
+      if (!this.reached.has(index)) {
+        const text = path.map((s) => `${s.attribute ? '@' : ''}${s.ns === undefined ? '' : `{${s.ns}}`}${s.name}`);
+        this.problems.warning('unreachable-path', `the document does not reach /${text.join('/')}`);
+      }
+    });
     if (this.identities.length > 0) {
       planIdentities(this.identities, this.options.rng);
       // Only this check, never a validator's verdict, clears references: libxml2 does not resolve them.
@@ -297,6 +409,8 @@ export class Walker {
     path: readonly string[],
     depth: number,
     global: boolean,
+    reach: readonly Active[] = [],
+    siblings: readonly InstanceNode[] = [],
   ): InstanceElement | undefined {
     this.nodes += 1;
     if (this.nodes > (this.options.maxNodes ?? 10000)) {
@@ -343,6 +457,18 @@ export class Walker {
       this.problems.error('unsupported', `${name} is abstract and cannot occur itself`, this.set.at(decl));
     }
     const out = element(ns, name);
+    if (this.options.facts) {
+      const fixedValue = attr(decl, 'fixed');
+      this.facts.set(out, {
+        kind: 'element',
+        decl,
+        nillable: ['true', '1'].includes(attr(decl, 'nillable') ?? ''),
+        ...(fixedValue !== undefined ? { fixed: fixedValue } : {}),
+        schemaless: this.schemaless > 0,
+        choices: [],
+      });
+    }
+    const ahead = this.advance(reach, ns, name, siblings);
     const fixed = attr(decl, 'fixed') ?? attr(decl, 'default');
     // Only 'random' draws a number here, so that 'never' does not change the other choices of a seed.
     if (
@@ -360,8 +486,8 @@ export class Walker {
       const qname = declared.qname;
       const complex = qname.ns === XS ? undefined : this.set.lookup('complexType', qname);
       if (complex) {
-        const chosen = this.typeFor(out, decl, complex, here, depth);
-        if (chosen) this.complex(out, chosen.node, chosen.doc, here, depth, fixed, decl);
+        const chosen = this.typeFor(out, decl, complex, here, depth, ahead);
+        if (chosen) this.complex(out, chosen.node, chosen.doc, here, depth, fixed, decl, ahead);
       } else if (out.nil) {
         // A nil element of a simple type has neither text nor attributes.
       } else if (!(qname.ns === XS && qname.local === 'anyType')) {
@@ -370,7 +496,7 @@ export class Walker {
         this.anyType(out, fixed);
       }
     } else if (declared.kind === 'anonymous' && declared.node.localName === 'complexType') {
-      this.complex(out, declared.node, this.set.documentOf(declared.node) ?? declDoc, here, depth, fixed, decl);
+      this.complex(out, declared.node, this.set.documentOf(declared.node) ?? declDoc, here, depth, fixed, decl, ahead);
     } else if (out.nil) {
       // as above
     } else if (declared.kind === 'anonymous') {
@@ -379,6 +505,109 @@ export class Walker {
       this.anyType(out, fixed);
     }
     return out;
+  }
+
+  /** The paths of `reach` that go on below an element, given the elements before it in its parent. */
+  private advance(reach: readonly Active[], ns: string, name: string, siblings: readonly InstanceNode[]): Active[] {
+    if (reach.length === 0) return [];
+    const position = 1 + siblings.filter((c) => c.kind === 'element' && c.ns === ns && c.name === name).length;
+    const ahead: Active[] = [];
+    for (const active of reach) {
+      const step = active.path[active.step];
+      if (!step || step.attribute || !stepMatches(step, ns, name) || (step.position ?? 1) !== position) continue;
+      if (active.step + 1 === active.path.length) this.reached.add(active.index);
+      else ahead.push({ ...active, step: active.step + 1 });
+    }
+    return ahead;
+  }
+
+  /** The element steps of paths that still need an element among `out`. */
+  private needed(ahead: readonly Active[], out: readonly InstanceNode[]): ExpandedStep[] {
+    const steps: ExpandedStep[] = [];
+    for (const active of ahead) {
+      const step = active.path[active.step];
+      if (step && !step.attribute && occurrencesOf(step, out) < (step.position ?? 1)) steps.push(step);
+    }
+    return steps;
+  }
+
+  /** Whether a particle can give an element of a step, without entering the content of elements. */
+  private offers(node: Element, doc: SchemaDocument, step: ExpandedStep, seen = new Set<Element>()): boolean {
+    const key = `${step.ns ?? '*'}|${step.name}`;
+    const known = this.offered.get(node)?.get(key);
+    if (known !== undefined) return known;
+    if (occurs(node).max === 0 || seen.has(node)) return false;
+    let result: boolean;
+    const next = new Set([...seen, node]);
+    switch (node.localName) {
+      case 'element': {
+        const ref = attr(node, 'ref');
+        if (ref === undefined) {
+          const form = attr(node, 'form');
+          const ns = (form === undefined ? doc.elementQualified : form === 'qualified') ? doc.targetNamespace : '';
+          result = stepMatches(step, ns, attr(node, 'name') ?? '');
+        } else {
+          const head = this.set.lookup('element', this.set.resolveQName(node, ref));
+          const candidates = head ? substitutionCandidates(this.set, head) : [];
+          result = (head ? [head, ...candidates] : []).some((c) =>
+            stepMatches(step, c.doc.targetNamespace, attr(c.node, 'name') ?? ''),
+          );
+        }
+        break;
+      }
+      case 'sequence':
+      case 'choice':
+      case 'all':
+        result = xsChildren(node).some((c) => this.offers(c, doc, step, next));
+        break;
+      case 'group': {
+        const group = this.set.reference('group', node);
+        result = group !== undefined && xsChildren(group.node).some((c) => this.offers(c, group.doc, step, next));
+        break;
+      }
+      default:
+        result = false;
+    }
+    const byStep = this.offered.get(node) ?? new Map<string, boolean>();
+    byStep.set(key, result);
+    this.offered.set(node, byStep);
+    return result;
+  }
+
+  /** Whether a complex type, with the types it derives from, declares an element or attribute of a step. */
+  private typeOffers(typeNode: Element, doc: SchemaDocument, step: ExpandedStep, seen = new Set<Element>()): boolean {
+    if (seen.has(typeNode)) return false;
+    seen.add(typeNode);
+    const content = xsChild(typeNode, 'simpleContent') ?? xsChild(typeNode, 'complexContent');
+    const derivation = content ? xsChildren(content)[0] : undefined;
+    const owner = derivation ?? typeNode;
+    const own = step.attribute
+      ? this.attributeOffers(owner, doc, step, new Set())
+      : xsChildren(owner).some((c) => MODEL_GROUPS.includes(c.localName ?? '') && this.offers(c, doc, step));
+    if (own) return true;
+    if (!derivation || (derivation.localName === 'restriction' && !step.attribute)) return false;
+    const base = this.set.lookup('complexType', this.set.resolveQName(derivation, attr(derivation, 'base') ?? ''));
+    return base !== undefined && this.typeOffers(base.node, base.doc, step, seen);
+  }
+
+  private attributeOffers(owner: Element, doc: SchemaDocument, step: ExpandedStep, seen: Set<Element>): boolean {
+    return xsChildren(owner).some((child) => {
+      if (child.localName === 'attribute') {
+        const ref = attr(child, 'ref');
+        if (ref !== undefined) {
+          const qn = this.set.resolveQName(child, ref);
+          return stepMatches(step, qn.ns, qn.local);
+        }
+        const form = attr(child, 'form');
+        const ns = (form === undefined ? doc.attributeQualified : form === 'qualified') ? doc.targetNamespace : '';
+        return stepMatches(step, ns, attr(child, 'name') ?? '');
+      }
+      if (child.localName !== 'attributeGroup') return false;
+      const group = this.set.reference('attributeGroup', child);
+      if (!group || seen.has(group.node)) return false;
+      seen.add(group.node);
+      return this.attributeOffers(group.node, group.doc, step, seen);
+    });
   }
 
   /** An element of xs:anyType, declared or for want of a type: empty, or its value constraint as text. */
@@ -397,6 +626,7 @@ export class Walker {
     declared: Component,
     path: readonly string[],
     depth: number,
+    ahead: readonly Active[],
   ): Component | undefined {
     const candidates = typeCandidates(this.set, decl, declared);
     if (candidates.length === 0) {
@@ -408,7 +638,14 @@ export class Walker {
       return undefined;
     }
     if (candidates.length > 1) out.typeable = true;
-    const index = candidates.length === 1 ? 0 : this.decide('type', decl, candidates, path, depth);
+    const facts = this.facts.get(out);
+    if (facts?.kind === 'element') facts.types = { declared, candidates };
+    const steps = ahead.map((a) => a.path[a.step]).filter((s): s is ExpandedStep => s !== undefined);
+    const wanted =
+      steps.length === 0 || candidates.length < 2
+        ? -1
+        : candidates.findIndex((c) => steps.some((step) => this.typeOffers(c.node, c.doc, step)));
+    const index = candidates.length === 1 ? 0 : this.decide('type', decl, candidates, path, depth, wanted);
     const chosen = candidates[index] ?? declared;
     if (chosen.node !== declared.node) {
       out.xsiType = { ns: chosen.doc.targetNamespace, name: attr(chosen.node, 'name') ?? '' };
@@ -423,14 +660,16 @@ export class Walker {
     candidates: readonly Component[],
     path: readonly string[],
     depth: number,
+    wanted = -1,
   ): number {
-    const index = this.ask({ node, branches: candidates.map((c) => c.node), path, depth, kind });
+    const index = wanted >= 0 ? wanted : this.ask({ node, branches: candidates.map((c) => c.node), path, depth, kind });
     this.choices.push({
       id: choiceId(this.set, node),
       branch: index,
       branches: candidates.length,
       kind,
       alternatives: candidates.map(expandedName),
+      ...(wanted >= 0 ? { fixed: true as const } : {}),
     });
     return index;
   }
@@ -465,6 +704,16 @@ export class Walker {
     const node = text(value, form.type, form.list);
     out.children = [node];
     this.written.push({ facets, holder: node });
+    if (this.options.facts) {
+      const fixedValue = attr(decl, 'fixed');
+      this.facts.set(node, {
+        kind: 'value',
+        facets,
+        ...(fixedValue !== undefined ? { fixed: fixedValue } : {}),
+        required: true,
+        schemaless: this.schemaless > 0,
+      });
+    }
     this.identity(facets, path, 'element', names, fixed !== undefined, {
       get: () => node.value,
       set: (v) => {
@@ -585,10 +834,11 @@ export class Walker {
     depth: number,
     fixed: string | undefined,
     decl: Element,
+    ahead: readonly Active[] = [],
   ): void {
     this.scopes.push({ name: out.name, path, instanceId: (this.instances += 1), state: new Map() });
     try {
-      this.complexContent(out, typeNode, doc, path, depth, fixed, decl);
+      this.complexContent(out, typeNode, doc, path, depth, fixed, decl, ahead);
     } finally {
       this.scopes.pop();
     }
@@ -602,10 +852,23 @@ export class Walker {
     depth: number,
     fixed: string | undefined,
     decl: Element,
+    ahead: readonly Active[],
   ): void {
     const plan = this.plan(typeNode, doc);
     const scope = this.objectScope(plan.groups, plan.attributes);
-    out.attributes = this.attributes(out, plan.attributes, path, depth);
+    const facts = this.facts.get(out);
+    if (facts?.kind === 'element') {
+      facts.content = {
+        attributes: new Set(plan.attributes.keys()),
+        prohibited: plan.prohibited,
+        ...(plan.anyAttribute ? { anyAttribute: plan.anyAttribute } : {}),
+        anyElement: plan.groups.some((g) => this.hasWildcard(g.node, new Set())),
+        simple: plan.simple !== undefined,
+        mixed: plan.mixed,
+        models: plan.groups,
+      };
+    }
+    out.attributes = this.attributes(out, plan.attributes, path, depth, ahead);
     // Mixed content keeps its elements in the text property, so no attribute key can meet them.
     const keys = attributeKeys(plan.attributes, plan.mixed ? new Map() : scope.elements);
     for (const attribute of out.attributes) {
@@ -640,9 +903,12 @@ export class Walker {
     }
     const place = { scope, trail: [] };
     for (const group of plan.groups) {
-      this.particle(group.node, group.doc, path, depth, children, new Set(), place);
+      this.particle(group.node, group.doc, path, depth, children, new Set(), place, ahead);
     }
     out.children = children;
+    const occurrences = this.pendingChoices.get(children);
+    if (occurrences && facts?.kind === 'element') facts.choices = occurrences;
+    this.pendingChoices.delete(children);
     if (plan.mixed) out.mixed = true;
   }
 
@@ -738,9 +1004,14 @@ export class Walker {
     if (place.trail.length > 0) child.groups = [...place.trail];
   }
 
+  private slot(child: InstanceElement, min: number, max: number, count: number, context: ParticleContext): void {
+    const facts = this.facts.get(child);
+    if (facts?.kind === 'element') facts.slot = { min, max, count, ...context };
+  }
+
   /** The content of a complex type, following its derivation down to the base types. */
   private plan(typeNode: Element, doc: SchemaDocument, seen = new Set<Element>()): ContentPlan {
-    const empty: ContentPlan = { groups: [], attributes: new Map(), mixed: false };
+    const empty: ContentPlan = { groups: [], attributes: new Map(), mixed: false, prohibited: new Set() };
     if (seen.has(typeNode)) {
       this.problems.error('circular-type', 'circular complex type derivation', this.set.at(typeNode));
       return empty;
@@ -777,17 +1048,27 @@ export class Walker {
     }
     const owner = derivation ?? typeNode;
     const attributes = new Map(base.attributes);
-    this.collectAttributes(owner, doc, attributes, new Set());
+    const prohibited = new Set(base.prohibited);
+    this.collectAttributes(owner, doc, attributes, new Set(), prohibited);
+    const ownWildcard = this.attributeWildcard(owner, doc, new Set());
+    const extension = derivation?.localName === 'extension';
+    const wildcard = ownWildcard
+      ? extension && base.anyAttribute
+        ? { ...ownWildcard, namespace: [...new Set([...ownWildcard.namespace, ...base.anyAttribute.namespace])] }
+        : ownWildcard
+      : extension
+        ? base.anyAttribute
+        : undefined;
+    const extra = { prohibited, ...(wildcard ? { anyAttribute: wildcard } : {}) };
     if (simpleContent && derivation) {
       const facets = baseFacets ?? { builtin: 'string', variety: 'atomic' as const, patterns: [] };
       const simple = derivation.localName === 'restriction' ? this.facets.restrict(facets, derivation) : facets;
       const name = attr(typeNode, 'name');
       const simpleTypes = name === undefined ? baseTypes : [clark(doc.targetNamespace, name), ...baseTypes];
-      return { groups: [], attributes, simple, simpleTypes, mixed: false };
+      return { groups: [], attributes, simple, simpleTypes, mixed: false, ...extra };
     }
     const own = xsChildren(owner).find((c) => MODEL_GROUPS.includes(c.localName ?? ''));
     const groups = own ? [{ node: own, doc }] : [];
-    const extension = derivation?.localName === 'extension';
     // mixed on complexContent wins over mixed on the type. An extension that says nothing keeps the mixed content of
     // its base, as libxml2 does.
     const flag = (value: string | undefined) =>
@@ -797,6 +1078,7 @@ export class Walker {
       groups: extension ? [...base.groups, ...groups] : groups,
       attributes,
       mixed: declared ?? (extension && base.mixed),
+      ...extra,
     };
   }
 
@@ -806,6 +1088,7 @@ export class Walker {
     doc: SchemaDocument,
     into: Map<string, AttributeUse>,
     seen: Set<Element>,
+    prohibited?: Set<string>,
   ): void {
     for (const child of xsChildren(owner)) {
       if (child.localName === 'attribute') {
@@ -817,6 +1100,7 @@ export class Walker {
         const key = clark(qn.ns, qn.local);
         if (attr(child, 'use') === 'prohibited') {
           into.delete(key);
+          prohibited?.add(key);
         } else {
           into.set(key, { node: child, doc });
         }
@@ -828,7 +1112,7 @@ export class Walker {
         } else if (seen.has(group.node)) {
           this.problems.error('circular-group', `attribute group ${ref} refers to itself`, this.set.at(child));
         } else {
-          this.collectAttributes(group.node, group.doc, into, new Set([...seen, group.node]));
+          this.collectAttributes(group.node, group.doc, into, new Set([...seen, group.node]), prohibited);
         }
       }
     }
@@ -839,10 +1123,20 @@ export class Walker {
     uses: Map<string, AttributeUse>,
     path: readonly string[],
     depth: number,
+    ahead: readonly Active[] = [],
   ): InstanceAttribute[] {
     const out: InstanceAttribute[] = [];
-    for (const use of uses.values()) {
-      if (attr(use.node, 'use') !== 'required' && !this.includeOptional(depth, 'attribute')) {
+    for (const [key, use] of uses) {
+      const target = ahead.filter((a) => {
+        const step = a.path[a.step];
+        return (
+          step?.attribute === true &&
+          a.step === a.path.length - 1 &&
+          `{${step.ns ?? key.slice(1, key.indexOf('}'))}}${step.name}` === key
+        );
+      });
+      for (const a of target) this.reached.add(a.index);
+      if (attr(use.node, 'use') !== 'required' && target.length === 0 && !this.includeOptional(depth, 'attribute')) {
         continue;
       }
       let decl = use.node;
@@ -885,6 +1179,18 @@ export class Walker {
       const attribute: InstanceAttribute = { ns, name, value, type: form.type, ...(form.list ? { list: true } : {}) };
       out.push(attribute);
       this.written.push({ facets, holder: attribute });
+      if (this.options.facts) {
+        const fixedValue = attr(use.node, 'fixed') ?? attr(decl, 'fixed');
+        const onReference = attr(use.node, 'ref') !== undefined && attr(decl, 'fixed') === undefined;
+        this.facts.set(attribute, {
+          kind: 'value',
+          facets,
+          ...(fixedValue !== undefined ? { fixed: fixedValue } : {}),
+          ...(fixedValue !== undefined && onReference ? { fixedOnReference: true as const } : {}),
+          required: attr(use.node, 'use') === 'required',
+          schemaless: this.schemaless > 0,
+        });
+      }
       this.identity(facets, [...path, name], 'attribute', names, fixed !== undefined, {
         get: () => attribute.value,
         set: (v) => {
@@ -893,6 +1199,62 @@ export class Walker {
       });
     }
     return out;
+  }
+
+  /** The xs:anyAttribute of a type or derivation step, directly or through attribute groups. */
+  private attributeWildcard(
+    owner: Element,
+    doc: SchemaDocument,
+    seen: Set<Element>,
+  ): { namespace: string[]; targetNamespace: string } | undefined {
+    for (const child of xsChildren(owner)) {
+      if (child.localName === 'anyAttribute') {
+        return { namespace: splitXmlSpace(attr(child, 'namespace') ?? '##any'), targetNamespace: doc.targetNamespace };
+      }
+      if (child.localName === 'attributeGroup') {
+        const group = this.set.reference('attributeGroup', child);
+        if (!group || seen.has(group.node)) continue;
+        seen.add(group.node);
+        const found = this.attributeWildcard(group.node, group.doc, seen);
+        if (found) return found;
+      }
+    }
+    return undefined;
+  }
+
+  /** Whether a particle can occur without any element. */
+  private emptiable(node: Element, seen: Set<Element>): boolean {
+    if (occurs(node).min === 0 || seen.has(node)) return true;
+    seen.add(node);
+    switch (node.localName) {
+      case 'sequence':
+      case 'all':
+        return xsChildren(node).every((c) => this.emptiable(c, new Set(seen)));
+      case 'choice':
+        return xsChildren(node).some((c) => this.emptiable(c, new Set(seen)));
+      case 'group': {
+        const group = this.set.reference('group', node);
+        const compositor = group && xsChildren(group.node)[0];
+        return compositor === undefined || this.emptiable(compositor, seen);
+      }
+      default:
+        return false;
+    }
+  }
+
+  /** Whether a model group admits elements through xs:any. */
+  private hasWildcard(node: Element, seen: Set<Element>): boolean {
+    if (seen.has(node) || occurs(node).max === 0) return false;
+    seen.add(node);
+    if (node.localName === 'any') return true;
+    if (node.localName === 'group') {
+      const group = this.set.reference('group', node);
+      return group !== undefined && xsChildren(group.node).some((c) => this.hasWildcard(c, seen));
+    }
+    return (
+      ['sequence', 'choice', 'all'].includes(node.localName ?? '') &&
+      xsChildren(node).some((c) => this.hasWildcard(c, seen))
+    );
   }
 
   // --- content models ------------------------------------------------------------------------------------------
@@ -921,8 +1283,15 @@ export class Walker {
     out: InstanceNode[],
     groups: Set<Element>,
     place: Place,
+    ahead: readonly Active[] = [],
+    context: ParticleContext = TOP,
   ): void {
     const { min, max } = occurs(node);
+    const inner = (compositor: ParticleContext['compositor']): ParticleContext => ({
+      compositor,
+      repeated: context.repeated || max > 1,
+      required: context.required && min >= 1,
+    });
     if (max === 0) {
       return;
     }
@@ -935,7 +1304,16 @@ export class Walker {
       this.problems.error('invalid-facet', 'invalid occurrence range', this.set.at(node));
       return;
     }
-    const times = this.count(min, max, depth);
+    let times = this.count(min, max, depth);
+    // A path of reach takes the particle as often as its position needs.
+    const wants = ahead.length === 0 ? [] : this.needed(ahead, out).filter((step) => this.offers(node, doc, step));
+    if (wants.length > 0) {
+      const more =
+        node.localName === 'element'
+          ? Math.max(...wants.map((step) => (step.position ?? 1) - occurrencesOf(step, out)))
+          : 1;
+      times = Math.min(max, Math.max(times, more));
+    }
     if (times > (this.options.maxNodes ?? 10000)) throw new LimitError('particle occurrence count exceeds maxNodes');
     switch (node.localName) {
       case 'element': {
@@ -950,22 +1328,28 @@ export class Walker {
         }
         for (let k = 0; k < times; k += 1) {
           if (!members) {
-            const child = this.element(node, doc, path, depth + 1, false);
+            const child = this.element(node, doc, path, depth + 1, false, ahead, out);
             if (child) {
               this.placed(child, max, place);
+              this.slot(child, min, max, times, context);
               out.push(child);
             }
             continue;
           }
           // A template writes every member; an instance one per occurrence of the particle.
+          const steps = ahead.length === 0 ? [] : this.needed(ahead, out);
+          const wanted = members.findIndex((m) =>
+            steps.some((step) => stepMatches(step, m.doc.targetNamespace, attr(m.node, 'name') ?? '')),
+          );
           const indices = this.options.allBranches
             ? members.map((_, i) => i)
-            : [members.length === 1 ? 0 : this.decide('substitution', node, members, path, depth)];
+            : [members.length === 1 ? 0 : this.decide('substitution', node, members, path, depth, wanted)];
           for (const index of indices) {
             const member = members[index];
-            const child = member && this.element(member.node, member.doc, path, depth + 1, true);
+            const child = member && this.element(member.node, member.doc, path, depth + 1, true, ahead, out);
             if (child) {
               this.placed(child, max, place);
+              this.slot(child, min, max, times, context);
               out.push(child);
             }
           }
@@ -976,10 +1360,11 @@ export class Walker {
       case 'all': {
         const members = xsChildren(node);
         const enter = this.entering(node, max, place, members, doc);
+        const below = inner(node.localName === 'all' ? 'all' : 'sequence');
         for (let k = 0; k < times; k += 1) {
-          const inner = enter();
+          const occurrence = enter();
           for (const child of members) {
-            this.particle(child, doc, path, depth, out, groups, inner);
+            this.particle(child, doc, path, depth, out, groups, occurrence, ahead, below);
           }
         }
         return;
@@ -991,14 +1376,35 @@ export class Walker {
         const branches = available.length > 0 ? available : possible;
         const enter = this.entering(node, max, place, branches, doc);
         for (let k = 0; k < times && branches.length > 0; k += 1) {
-          const index = this.ask({ node, branches, path, depth, kind: 'choice' });
+          const steps = ahead.length === 0 ? [] : this.needed(ahead, out);
+          const wanted =
+            steps.length === 0 ? -1 : branches.findIndex((b) => steps.some((step) => this.offers(b, doc, step)));
+          const index = wanted >= 0 ? wanted : this.ask({ node, branches, path, depth, kind: 'choice' });
           // A template writes every branch; in XML each one is an occurrence of the choice of its own.
           const indices = this.options.allBranches ? branches.map((_, i) => i) : [index];
           for (const selected of indices) {
             const branch = branches[selected];
             if (branch) {
-              this.choices.push({ id: choiceId(this.set, node), branch: selected, branches: branches.length });
-              this.particle(branch, doc, path, depth, out, groups, enter());
+              this.choices.push({
+                id: choiceId(this.set, node),
+                branch: selected,
+                branches: branches.length,
+                ...(wanted >= 0 && !this.options.allBranches ? { fixed: true as const } : {}),
+              });
+              const first = out.length;
+              // A choice with a branch that can be empty may be met without any of its elements.
+              const choice = this.options.facts
+                ? {
+                    ...inner('choice'),
+                    ...(branches.some((b) => this.emptiable(b, new Set())) ? { required: false } : {}),
+                  }
+                : inner('choice');
+              this.particle(branch, doc, path, depth, out, groups, enter(), ahead, choice);
+              if (this.options.facts) {
+                const list = this.pendingChoices.get(out) ?? [];
+                list.push({ node, doc, branch: selected, branches, first, end: out.length, context: choice });
+                this.pendingChoices.set(out, list);
+              }
             }
           }
         }
@@ -1018,7 +1424,11 @@ export class Walker {
         const compositor = xsChildren(group.node)[0];
         const enter = this.entering(group.node, max, place, compositor ? [compositor] : [], group.doc);
         for (let k = 0; k < times && compositor; k += 1) {
-          this.particle(compositor, group.doc, path, depth, out, new Set([...groups, group.node]), enter());
+          this.particle(compositor, group.doc, path, depth, out, new Set([...groups, group.node]), enter(), ahead, {
+            ...context,
+            repeated: context.repeated || max > 1,
+            required: context.required && min >= 1,
+          });
         }
         return;
       }

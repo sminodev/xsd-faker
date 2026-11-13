@@ -151,6 +151,32 @@ function writer(plan: NamespacePlan, indent: string) {
   return write;
 }
 
+/**
+ * The line each element starts on when `serializeXml` writes the tree with these options. A validator names the line
+ * of an element's start tag, so its messages can be traced to an element, not only to a name.
+ */
+export function elementLines(root: InstanceElement, options: SerializeOptions = {}): Map<InstanceElement, number> {
+  const indent = options.indent ?? '  ';
+  const lines = new Map<InstanceElement, number>();
+  const breaks = (text: string) => text.split('\n').length - 1;
+  // Follows `writer`: start tags and attribute values hold no line break, text keeps its own. Returns the last line.
+  const visit = (node: InstanceNode, line: number, depth: number, compact: boolean): number => {
+    if (node.kind === 'text') return line + breaks(node.value);
+    lines.set(node, line);
+    if (node.children.every((c) => c.kind === 'text' && c.value === '')) return line;
+    const mixed = compact || node.children.some((c) => c.kind === 'text');
+    let at = line;
+    if (mixed || indent === '') {
+      for (const child of node.children) at = visit(child, at, depth + 1, mixed);
+      return at;
+    }
+    for (const child of node.children) at = visit(child, at + 1 + breaks(indent) * (depth + 1), depth + 1, false);
+    return at + 1 + breaks(indent) * depth;
+  };
+  visit(root, options.declaration === false ? 1 : 2, 0, false);
+  return lines;
+}
+
 export function serializeXml(root: InstanceElement, options: SerializeOptions = {}): string {
   const indent = options.indent ?? '  ';
   const plan = planNamespaces(root, options.prefixes);

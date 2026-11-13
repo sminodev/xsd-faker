@@ -1,7 +1,8 @@
 import { DOMParser, type Element } from '@xmldom/xmldom';
 import { describe, expect, it } from 'vitest';
-import { escapeAttribute, planNamespaces, serializeMixed, serializeXml } from './serialize.js';
-import { element, type InstanceElement, text } from './tree.js';
+import { createRng } from '../rng.js';
+import { elementLines, escapeAttribute, planNamespaces, serializeMixed, serializeXml } from './serialize.js';
+import { element, elements, type InstanceElement, type InstanceNode, text } from './tree.js';
 
 const A = 'urn:a';
 const B = 'urn:b';
@@ -166,5 +167,48 @@ describe('elements without content', () => {
     root.mixed = true;
     expect(serializeXml(root, { declaration: false })).toBe('<p xmlns="urn:a">a<br/>b</p>\n');
     expect(serializeMixed(root, planNamespaces(root))).toBe('a<br xmlns="urn:a"/>b');
+  });
+});
+
+describe('elementLines', () => {
+  /** A tree of random shape: element-only, mixed and simple content, text with line breaks, empty elements. */
+  const randomTree = (seed: number): InstanceElement => {
+    const rng = createRng(seed);
+    const build = (depth: number): InstanceElement => {
+      const node = element(rng.chance(0.3) ? B : A, `e${rng.int(0, 3)}`, {
+        attributes: rng.chance(0.3) ? [{ ns: '', name: 'a', value: 'x\ny', type: 'string' }] : [],
+      });
+      const kind = depth > 3 ? 0 : rng.int(0, 3);
+      if (kind === 1) node.children = [text(rng.pick(['v', 'line\nbreak', '', 'a\n\nb']))];
+      else if (kind >= 2) {
+        const children: InstanceNode[] = [];
+        for (let k = rng.int(1, 3); k > 0; k -= 1) {
+          if (kind === 3 && rng.chance(0.5)) children.push(text(rng.pick(['t', 'u\nv'])));
+          children.push(build(depth + 1));
+        }
+        node.children = children;
+        if (kind === 3) node.mixed = true;
+      }
+      return node;
+    };
+    return build(0);
+  };
+
+  it('gives the line a parser reads for each start tag', () => {
+    for (let seed = 1; seed <= 60; seed += 1) {
+      const tree = randomTree(seed);
+      for (const options of [{}, { indent: '' }, { declaration: false }, { indent: '\t' }]) {
+        const xml = serializeXml(tree, options);
+        const parsed: number[] = [];
+        const walk = (e: Element) => {
+          parsed.push((e as unknown as { lineNumber: number }).lineNumber);
+          for (const child of [...e.childNodes]) if (child.nodeType === 1) walk(child as Element);
+        };
+        const root = new DOMParser().parseFromString(xml, 'text/xml').documentElement;
+        if (root) walk(root);
+        const lines = elementLines(tree, options);
+        expect([...elements(tree)].map((e) => lines.get(e))).toEqual(parsed);
+      }
+    }
   });
 });

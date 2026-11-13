@@ -10,7 +10,7 @@ import { splitXmlSpace, trimXmlSpace } from '../xml/space.js';
 const patternCache = new Map<string, RegExp>();
 
 /** One regular expression for the patterns of all restriction steps. */
-function patternRegExp(steps: readonly (readonly string[])[]): RegExp {
+export function patternRegExp(steps: readonly (readonly string[])[]): RegExp {
   const key = JSON.stringify(steps);
   let regex = patternCache.get(key);
   if (regex === undefined) {
@@ -29,7 +29,7 @@ export function digitCounts(lexical: string): { total: number; fraction: number 
 }
 
 /** The length a length facet measures: octets for binary types, characters otherwise. */
-function measuredLength(builtin: string, value: string): number {
+export function measuredLength(builtin: string, value: string): number {
   if (builtin === 'hexBinary') {
     return value.length / 2;
   }

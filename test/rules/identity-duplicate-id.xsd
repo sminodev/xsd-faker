@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns="urn:example:rule" targetNamespace="urn:example:rule"
+  elementFormDefault="qualified">
+  <xs:element name="order">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="line" minOccurs="2" maxOccurs="2">
+          <xs:complexType>
+            <xs:attribute name="id" type="xs:ID" use="required"/>
+          </xs:complexType>
+        </xs:element>
+        <xs:element name="part" minOccurs="2" maxOccurs="2">
+          <xs:complexType>
+            <xs:attribute name="code" type="PartCode" use="required"/>
+          </xs:complexType>
+        </xs:element>
+        <xs:element name="use">
+          <xs:complexType>
+            <xs:attribute name="part" type="xs:IDREF" use="required"/>
+          </xs:complexType>
+        </xs:element>
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+  <xs:simpleType name="PartCode">
+    <xs:restriction base="xs:ID">
+      <xs:maxLength value="12"/>
+    </xs:restriction>
+  </xs:simpleType>
+</xs:schema>

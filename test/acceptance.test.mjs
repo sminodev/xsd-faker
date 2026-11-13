@@ -2135,6 +2135,58 @@ test('the CLI names the entry of a value list that is not a string or a non-empt
   }
 });
 
+test('the invalid command writes confirmed samples and a manifest of every sample', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'xsd-invalid-'));
+  const out = join(dir, 'matrix');
+  const messages = [];
+  const io = { stdout: (s) => messages.push(s), stderr: (s) => messages.push(s) };
+  try {
+    const code = await run(
+      ['invalid', join(root, 'examples/insurance/claim.xsd'), '--out-dir', out, '--seed', '7', '--max-files', '20'],
+      io,
+    );
+    assert.equal(code, 0, messages.join(''));
+    const manifest = JSON.parse(readFileSync(join(out, 'manifest.json'), 'utf8'));
+    assert.equal(manifest.samples.length, 20);
+    assert.equal(manifest.counts.confirmed, manifest.samples.filter((s) => s.status === 'confirmed').length);
+    const files = readdirSync(out).filter((f) => f.endsWith('.xml'));
+    assert.deepEqual(
+      files,
+      manifest.samples.filter((s) => s.file !== null).map((s) => s.file),
+    );
+    for (const sample of manifest.samples) {
+      assert.match(sample.path, /^\/\{urn:example:insurance\}Claim/);
+      assert.equal(sample.expected, 'invalid');
+    }
+    const confirmed = manifest.samples.filter((s) => s.status === 'confirmed');
+    const verdicts = await validator(
+      {
+        entry: 'claim.xsd',
+        files: new Map([['claim.xsd', readFileSync(join(root, 'examples/insurance/claim.xsd'), 'utf8')]]),
+      },
+      confirmed.map((s) => readFileSync(join(out, s.file), 'utf8')),
+    );
+    assert.ok(verdicts.every((v) => !v.valid));
+    assert.equal(await run(['invalid', join(root, 'examples/insurance/claim.xsd'), '--out-dir', out], io), 1);
+    assert.equal(
+      await run(
+        [
+          'invalid',
+          join(root, 'examples/insurance/claim.xsd'),
+          '--out-dir',
+          join(dir, 'x'),
+          '--rules',
+          'facet:nothing',
+        ],
+        io,
+      ),
+      1,
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('the CLI writes a document under a locale for names of Object.prototype', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'xsd-proto-names-'));
   try {

@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns="urn:example:rule" targetNamespace="urn:example:rule"
+  elementFormDefault="qualified">
+  <xs:group name="Method">
+    <xs:choice>
+      <xs:element name="card" type="xs:string"/>
+      <xs:element name="cash" type="xs:string"/>
+    </xs:choice>
+  </xs:group>
+  <xs:group name="Extras">
+    <xs:sequence>
+      <xs:element name="cash" type="xs:string" minOccurs="0"/>
+    </xs:sequence>
+  </xs:group>
+  <xs:element name="order">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="fulfilment">
+          <xs:complexType>
+            <xs:choice>
+              <xs:element name="pickup" type="xs:string"/>
+              <xs:element name="delivery" type="xs:string"/>
+            </xs:choice>
+          </xs:complexType>
+        </xs:element>
+        <xs:element name="handover">
+          <xs:complexType>
+            <xs:sequence>
+              <xs:choice>
+                <xs:element name="pickup" type="xs:string"/>
+                <xs:element name="delivery" type="xs:string"/>
+              </xs:choice>
+              <xs:element name="delivery" type="xs:string" minOccurs="0"/>
+            </xs:sequence>
+          </xs:complexType>
+        </xs:element>
+        <xs:element name="method">
+          <xs:complexType>
+            <xs:sequence>
+              <xs:group ref="Method"/>
+              <xs:group ref="Extras"/>
+            </xs:sequence>
+          </xs:complexType>
+        </xs:element>
+        <xs:element name="payment">
+          <xs:complexType>
+            <xs:choice>
+              <xs:element name="card" type="xs:string"/>
+              <xs:sequence>
+                <xs:element name="voucher" type="xs:string" minOccurs="0"/>
+              </xs:sequence>
+            </xs:choice>
+          </xs:complexType>
+        </xs:element>
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+</xs:schema>

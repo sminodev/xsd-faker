@@ -5,13 +5,20 @@ streets, cities with their postcodes, phone number patterns, e-mail domains and 
 (`de`) and English with US addresses (`en`). The package holds data and the tools to define it; xsd-faker
 decides which field of a schema gets which value.
 
+xsd-faker installs this package and exports all of it, so with xsd-faker you import from `xsd-faker` and
+never need this package in your own dependencies:
+
 ```js
+import { extendLocale, de } from 'xsd-faker';
 import { generateSampleFile } from 'xsd-faker/node';
 
-const sample = await generateSampleFile('order.xsd', { locale: 'de' });
+const office = extendLocale(de, { person: { title: ['Dr.', 'Prof.'] } });
+const sample = await generateSampleFile('order.xsd', { locale: office });
 ```
 
-## A locale of your own
+## Without xsd-faker
+
+A tool that only needs the data, such as a test data builder of its own, depends on this package directly:
 
 ```js
 import { defineLocale, extendLocale, de, en } from 'xsd-faker-locales';

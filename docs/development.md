@@ -20,7 +20,9 @@ src/
   generate/identities.ts    ID and IDREF planning with its integrity check
   xml/                 ordered instance tree and XML serialization
   json/serialize.ts    compact/tree JSON projection
-  validate/xmllint.ts  explicit libxml2 verdicts
+  validate/xmllint.ts  explicit libxml2 verdicts, in batches against one compiled schema
+  mutate/              invalid samples: paths, violating values, tree changes, the classifier of libxml2
+                       messages, namespace mapping and the matrix that plans and judges the changes
 packages/locales/     the locale data package: types, defineLocale, extendLocale and the built-in locales
 ```
 
@@ -50,7 +52,9 @@ npm run verify
 order. Typecheck and build compile the locale package first, because the library imports its declarations.
 The `src/**/*.test.ts` and `packages/*/src/**/*.test.ts` suites use Vitest. They cover the parser, random
 source, facets, walker, alternatives, ID planning, the DOCTYPE profile, redefine, size limits, value lists,
-locales, serialization and validation. The
+locales, serialization, validation and invalid samples. `test/rules/` holds one minimal schema per rule of
+the invalid samples; `src/mutate/gold.test.ts` requires every sample of each to be confirmed by the installed
+xmllint-wasm, whose version the package pins, so a validator that words a message differently fails there. The
 `XSD_CORPUS` suite runs only when that variable names a directory of schemas; otherwise no corpus tests
 are registered. Each generated corpus sample must have `status: 'valid'`, not just a positive validator
 verdict.

@@ -13,11 +13,15 @@ import {
   smallestBranch,
   Walker,
   LimitError,
+  type ElementFacts,
+  type ValueFacts,
 } from './generate/walker.js';
+import { type Base, type InvalidMatrix, type InvalidOptions, runMatrix } from './mutate/matrix.js';
 import { toJson, JsonMappingError, type JsonOptions, type JsonValue } from './json/serialize.js';
 import { checkOptions } from './options.js';
+import { parseExpandedPath } from './mutate/path.js';
 import { createRng } from './rng.js';
-import { validateXml, type SchemaFiles, type XmlValidator } from './validate/xmllint.js';
+import { validateXml, type SchemaFiles, type Verdict, type XmlValidator } from './validate/xmllint.js';
 import { listed, valueLists, type ValueLists } from './values/lists.js';
 import { localeValues, type FieldKey } from './values/locale/index.js';
 import type { LocaleData } from 'xsd-faker-locales';
@@ -54,10 +58,14 @@ export { valueLists } from './values/lists.js';
 export type { ValueLists } from './values/lists.js';
 export { FIELD_KEYS, localeValues, LOCALES } from './values/locale/index.js';
 export type { FieldKey, LocaleOptions } from './values/locale/index.js';
-export { defineLocale, extendLocale, localeFromFaker } from 'xsd-faker-locales';
+export { de, defineLocale, en, extendLocale, localeFromFaker } from 'xsd-faker-locales';
 export type {
   AddressData,
   ContactData,
+  DeepPartial,
+  FakerList,
+  FakerLocaleDefinition,
+  FakerOptions,
   Gendered,
   LocaleData,
   LocaleInput,
@@ -73,6 +81,25 @@ export type { Problem, ProblemCode } from './xsd/problems.js';
 export type { SchemaLimits, SchemaSource, SchemaText } from './xsd/schema-set.js';
 export { DEFAULT_LIMITS, SchemaEncodingError, SchemaLimitError, UnsafeLocationError } from './xsd/schema-set.js';
 export { validateXml, SchemaCompileError } from './validate/xmllint.js';
+export { RULES } from './mutate/rules.js';
+export type { IdentityRule, NilRule, Rule, ValueRule } from './mutate/rules.js';
+export { formatExpandedPath, parseExpandedPath } from './mutate/path.js';
+export type { ExpandedPath, ExpandedStep } from './mutate/path.js';
+export { generateViolatingValue } from './mutate/value.js';
+export type { ValueFacets, ViolatingValue, ViolatingValueRequest } from './mutate/value.js';
+export { applyTreeMutation } from './mutate/tree.js';
+export type {
+  AppliedMutation,
+  MutationContext,
+  MutationLines,
+  TreeMutation,
+  TreeMutationResult,
+} from './mutate/tree.js';
+export { classifyVerdict, parseDiagnostic } from './mutate/classify.js';
+export type { Classification, ConfirmationStatus, Diagnostic } from './mutate/classify.js';
+export { mapNamespaces } from './mutate/namespaces.js';
+export type { NamespaceMapping } from './mutate/namespaces.js';
+export type { InvalidMatrix, InvalidOptions, InvalidSample, NotConstructible } from './mutate/matrix.js';
 export type { SchemaFiles, Verdict, XmlValidator } from './validate/xmllint.js';
 export interface GenerateOptions extends LoadOptions {
   root?: string;
@@ -93,6 +120,12 @@ export interface GenerateOptions extends LoadOptions {
         prefer: string[];
       }
     | ChoiceStrategy;
+  /**
+   * Paths the document has to contain, such as `/{urn:o}order/{urn:o}item[2]/@code`: their optional ancestors,
+   * choice branches, substitution group members and xsi:type alternatives are taken. A path the schema does not
+   * allow gives the warning `unreachable-path`. Decisions a path fixes do not count for coverage.
+   */
+  reach?: readonly string[];
   /** Optional-element expansion depth. Root depth is zero. Default: 12, and always lower than maxTotalDepth. */
   maxDepth?: number;
   /** Hard limit including required content. Default: 64. Exceeding it is a generation error. */
@@ -308,16 +341,22 @@ function source(options: GenerateOptions): ValueSource {
 }
 /** Called after each attempt with its branch trace and status; coverage uses it to plan the next choices. */
 type AttemptObserver = (choices: Sample['choices'], status: SampleStatus) => void;
+/** The facts of the walker for each sample, where a caller asks for them. */
+type FactsBySample = Map<Sample, Map<object, ElementFacts | ValueFacts>>;
 async function generatePrepared(
   prepared: Prepared,
   options: GenerateOptions,
   observe?: AttemptObserver,
+  facts?: FactsBySample,
+  /** verdicts known in advance, by document text */
+  known?: Map<string, Verdict>,
 ): Promise<Sample> {
   const template = options.mode === 'template';
   const validate = !template && (options.validate ?? true);
   const attempts = validate ? (options.attempts ?? 10) : 1;
   const namespacePrefixes = prefixes(prepared.set, options.prefixes);
   const values = source(options);
+  const reach = options.reach?.map(parseExpandedPath);
   let last: Sample | undefined;
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     const seed = (options.seed ?? 1) + attempt;
@@ -334,8 +373,10 @@ async function generatePrepared(
       maxTotalDepth: options.maxTotalDepth ?? 64,
       maxNodes: options.maxNodes ?? 10000,
       values,
+      ...(reach !== undefined && reach.length > 0 ? { reach } : {}),
       userSupplied: (target) => options.samples !== undefined && listed(options.samples, target),
       rng: createRng(seed),
+      ...(facts ? { facts: true } : {}),
     });
     let tree: InstanceElement;
     try {
@@ -386,7 +427,8 @@ async function generatePrepared(
     let valid: boolean | undefined;
     let errors: string[] = [];
     if (validate) {
-      const verdicts = await (options.validator ?? validateXml)(prepared.schemas, [xml]);
+      const cached = known?.get(xml);
+      const verdicts = cached ? [cached] : await (options.validator ?? validateXml)(prepared.schemas, [xml]);
       const verdict = verdicts[0];
       if (verdicts.length !== 1 || !verdict || typeof verdict.valid !== 'boolean' || !Array.isArray(verdict.errors)) {
         throw new TypeError('validator must return exactly one explicit verdict per document');
@@ -417,6 +459,7 @@ async function generatePrepared(
       problems: issues,
       choices: walker.choices,
     };
+    facts?.set(last, walker.facts);
     observe?.(walker.choices, status);
     if (!validate || status === 'valid') {
       return last;
@@ -457,6 +500,8 @@ export interface SampleBatch {
   samples: Sample[];
   coverage: Coverage;
 }
+/** Documents generated ahead and validated together, without coverage. */
+const SPECULATION = 50;
 /** Failed attempts after which a branch not yet accepted yields to other open branches in coverage planning. */
 const FAILURE_LIMIT = 2;
 /** Bounded branch exploration. Coverage counts accepted XML instances, not attempts or templates. */
@@ -467,7 +512,11 @@ export async function generateSamples(input: GenerateInput, options: BatchOption
     throw tooDeep(error);
   }
 }
-async function batch(input: GenerateInput, options: BatchOptions): Promise<SampleBatch> {
+async function batch(
+  input: GenerateInput,
+  options: BatchOptions,
+  extra: { prepared?: Prepared; facts?: FactsBySample } = {},
+): Promise<SampleBatch> {
   checkOptions(options);
   const count = options.count ?? 1;
   if (!Number.isSafeInteger(count) || count < 1 || count > 1000) {
@@ -476,7 +525,7 @@ async function batch(input: GenerateInput, options: BatchOptions): Promise<Sampl
   if (options.coverage && (options.mode === 'template' || options.validate === false)) {
     throw new TypeError('coverage requires validated instance mode');
   }
-  const prepared = prepare(input, options);
+  const prepared = extra.prepared ?? prepare(input, options);
   const known = new Map<string, number>();
   /** the kind and alternatives of substitution groups and xsi:type decisions */
   const named = new Map<string, { kind: 'substitution' | 'type'; alternatives: string[] }>();
@@ -542,7 +591,7 @@ async function batch(input: GenerateInput, options: BatchOptions): Promise<Sampl
   const recordFailures: AttemptObserver = (choices, status) => {
     if (status === 'valid') return;
     for (const visit of choices) {
-      if (accepted.get(visit.id)?.has(visit.branch)) continue;
+      if (visit.fixed || accepted.get(visit.id)?.has(visit.branch)) continue;
       const counts = failures.get(visit.id) ?? Array.from({ length: visit.branches }, () => 0);
       counts[visit.branch] = (counts[visit.branch] ?? 0) + 1;
       failures.set(visit.id, counts);
@@ -550,14 +599,38 @@ async function batch(input: GenerateInput, options: BatchOptions): Promise<Sampl
   };
   const samples: Sample[] = [];
   let seed = options.seed ?? 1;
+  // Without coverage, the next documents do not depend on each other's verdicts: their first attempts are
+  // generated ahead and validated together, and each document then takes its verdict from there.
+  const judged = new Map<string, Verdict>();
+  const ahead = new Set<number>();
+  const validating = options.mode !== 'template' && options.validate !== false;
   for (let i = 0; i < count; i += 1) {
+    if (validating && !options.coverage && count - i > 1 && !ahead.has(seed)) {
+      const seeds = Array.from({ length: Math.min(SPECULATION, count - i) }, (_, k) => seed + k);
+      const drafts = [];
+      for (const next of seeds) {
+        ahead.add(next);
+        drafts.push((await generatePrepared(prepared, { ...options, seed: next, validate: false })).xml);
+      }
+      const verdicts = await (options.validator ?? validateXml)(prepared.schemas, drafts);
+      if (verdicts.length === drafts.length) {
+        drafts.forEach((xml, k) => {
+          const verdict = verdicts[k];
+          if (verdict) judged.set(xml, verdict);
+        });
+      }
+    }
     const sample = await generatePrepared(
       prepared,
       { ...options, seed, ...(options.coverage ? { choice: balanced } : {}) },
       options.coverage ? recordFailures : undefined,
+      extra.facts,
+      judged,
     );
     samples.push(sample);
     for (const visit of sample.choices) {
+      // A decision that a path of reach fixed is neither open nor covered.
+      if (visit.fixed) continue;
       known.set(visit.id, visit.branches);
       if (visit.kind) named.set(visit.id, { kind: visit.kind, alternatives: visit.alternatives ?? [] });
       if (sample.status === 'valid') {
@@ -601,4 +674,77 @@ async function batch(input: GenerateInput, options: BatchOptions): Promise<Sampl
       uncovered,
     },
   };
+}
+
+export interface InvalidSampleOptions extends BatchOptions, InvalidOptions {}
+
+/**
+ * Invalid samples, each made from a valid one by a change that breaks one rule of the schema, and judged by the
+ * validator. Optional elements and attributes default to `all`, so that more of the schema can be broken.
+ */
+export async function generateInvalidSamples(
+  input: GenerateInput,
+  options: InvalidSampleOptions = {},
+): Promise<InvalidMatrix> {
+  try {
+    return await invalid(input, options);
+  } catch (error) {
+    throw tooDeep(error);
+  }
+}
+
+async function invalid(input: GenerateInput, options: InvalidSampleOptions): Promise<InvalidMatrix> {
+  if (options.mode === 'template' || options.validate === false) {
+    throw new TypeError('invalid samples require validated instance mode');
+  }
+  const settings: BatchOptions = {
+    ...options,
+    ...(options.optional === undefined && options.optionalElements === undefined ? { optionalElements: 'all' } : {}),
+    ...(options.optional === undefined && options.optionalAttributes === undefined
+      ? { optionalAttributes: 'all' }
+      : {}),
+    json: false,
+  };
+  checkOptions(settings);
+  const prepared = prepare(input, settings);
+  let facts: FactsBySample = new Map();
+  let samples: Sample[];
+  try {
+    ({ samples } = await batch(input, settings, { prepared, facts }));
+  } catch (error) {
+    // All optional elements of a large schema can exceed maxNodes; then the samples keep to required elements,
+    // unless the caller chose the optional elements.
+    const chosen = options.optional !== undefined || options.optionalElements !== undefined;
+    if (chosen || !(error instanceof GenerateError) || !error.problems.some((p) => p.code === 'resource-limit')) {
+      throw error;
+    }
+    settings.optionalElements = 'none';
+    facts = new Map();
+    ({ samples } = await batch(input, settings, { prepared, facts }));
+  }
+  const bases: Base[] = samples
+    .filter((sample) => sample.status === 'valid')
+    .map((sample) => ({ tree: sample.tree, seed: sample.seed, facts: facts.get(sample) ?? new Map() }));
+  const layout = {
+    prefixes: prefixes(prepared.set, settings.prefixes),
+    ...(settings.indent !== undefined ? { indent: settings.indent } : {}),
+    ...(settings.schemaLocation !== undefined ? { schemaLocation: settings.schemaLocation } : {}),
+  };
+  return runMatrix(
+    bases,
+    {
+      set: prepared.set,
+      schemas: prepared.schemas,
+      validator: settings.validator ?? validateXml,
+      layout,
+      serialize: (tree) => serializeXml(tree, layout),
+      reach: async (path, seed) => {
+        const { coverage, ...rest } = settings;
+        void coverage;
+        const sample = await generatePrepared(prepared, { ...rest, reach: [path], seed, validate: false });
+        return sample.tree;
+      },
+    },
+    options,
+  );
 }

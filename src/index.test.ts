@@ -2,8 +2,15 @@ import { readdirSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { GenerateError, generateSample, type ValueSource } from './index.js';
-import { generateSampleFile } from './node.js';
+import {
+  GenerateError,
+  generateSample,
+  type Sample,
+  type ValueSource,
+  validateXml,
+  type XmlValidator,
+} from './index.js';
+import { generateSampleFile, generateSampleFiles } from './node.js';
 
 const ORDER = fileURLToPath(new URL('../examples/retail/order.xsd', import.meta.url));
 
@@ -98,5 +105,33 @@ describe.skipIf(corpus === undefined)('corpus in XSD_CORPUS', () => {
       }
       expect(sample.status, `${optional}:\n${sample.errors.slice(0, 5).join('\n')}`).toBe('valid');
     }
+  });
+});
+
+describe('generateSamples without coverage', () => {
+  it('validates documents together and still gives the documents of one at a time', async () => {
+    // Rejects some documents, so that some samples need further attempts and shift the seeds after them.
+    const calls: number[] = [];
+    const validator: XmlValidator = async (schema, documents) => {
+      calls.push(documents.length);
+      const verdicts = await validateXml(schema, documents);
+      return verdicts.map((v, i) =>
+        (documents[i]?.length ?? 0) % 3 === 0 ? { valid: false, errors: ['rejected'] } : v,
+      );
+    };
+    const options = { optional: 'random' as const, choice: 'random' as const, attempts: 4, validator };
+    const batch = await generateSampleFiles(ORDER, { ...options, count: 12, seed: 3 });
+    expect(calls.some((n) => n > 1)).toBe(true);
+    const single: Sample[] = [];
+    let seed = 3;
+    for (let i = 0; i < 12; i += 1) {
+      const sample = await generateSampleFile(ORDER, { ...options, seed });
+      single.push(sample);
+      seed = sample.seed + 1;
+    }
+    expect(batch.samples.map((s) => [s.seed, s.attempts, s.status, s.xml])).toEqual(
+      single.map((s) => [s.seed, s.attempts, s.status, s.xml]),
+    );
+    expect(batch.samples.some((s) => s.attempts > 1)).toBe(true);
   });
 });

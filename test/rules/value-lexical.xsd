@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns="urn:example:rule" xmlns:r="urn:example:rule" targetNamespace="urn:example:rule"
+  elementFormDefault="qualified">
+  <xs:element name="order">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="date" type="xs:date"/>
+        <xs:element name="reference"><xs:simpleType><xs:union memberTypes="xs:int xs:date"/></xs:simpleType></xs:element>
+        <xs:element name="line" maxOccurs="2">
+          <xs:complexType>
+            <xs:sequence>
+              <xs:element name="number" type="xs:int"/>
+            </xs:sequence>
+          </xs:complexType>
+        </xs:element>
+      </xs:sequence>
+    </xs:complexType>
+    <xs:unique name="lineNumber">
+      <xs:selector xpath="r:line"/>
+      <xs:field xpath="r:number"/>
+    </xs:unique>
+  </xs:element>
+</xs:schema>

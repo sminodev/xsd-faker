@@ -144,6 +144,20 @@ Use `json: { mode: 'tree' }` or `--json-mode tree` when names, child order and l
 Use `json: { numbers: 'string' }` when consumers need decimal values as strings. These are different
 contracts, not interchangeable representations. See [JSON output](docs/output.md).
 
+## Invalid samples
+
+`xsd-faker invalid` writes documents a consumer must reject. Each is a valid sample changed to break one rule of
+the schema, such as a value outside a facet, a missing element or an unknown attribute. The validator's messages
+then decide whether it breaks exactly that rule. Confirmed samples are written as files, and `manifest.json`
+lists every sample with its status:
+
+```sh
+npx xsd-faker invalid examples/retail/order.xsd --out-dir order-invalid --count 3 --coverage --seed 7
+```
+
+`generateInvalidSamples` does the same in code. [Invalid samples](docs/invalid.md) lists the rules, the status
+of a sample and the limits.
+
 ## Examples
 
 [Retail](examples/retail), [insurance](examples/insurance) and [logistics](examples/logistics) include XSD

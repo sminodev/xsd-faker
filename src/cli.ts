@@ -1,8 +1,9 @@
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, relative, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
-import { generateSampleFiles, listRootsFile } from './node.js';
+import { fileInput, generateInvalidSamples, generateSampleFiles, listRootsFile } from './node.js';
 import type { BatchOptions, NilMode, OptionalMode, Sample, SchemaLimits, ValueLists, XmlValidator } from './index.js';
+import { RULES, type Rule } from './mutate/rules.js';
 export interface CliOutput {
   stdout(text: string): void;
   stderr(text: string): void;
@@ -12,8 +13,10 @@ const PACKAGE_VERSION = (
 ).version;
 
 const HELP = `xsd-faker <entry.xsd> [options]
+xsd-faker invalid <entry.xsd> --out-dir <directory> [options]
 
 Generate XML and JSON fixtures from XML Schema 1.0. No network access.
+The invalid command writes invalid samples, each breaking one rule; see invalid --help.
 
   --list-roots                    List global roots as JSON; no generation
   --root <name>                   Local name, prefix:name or {namespace}name
@@ -31,6 +34,7 @@ Generate XML and JSON fixtures from XML Schema 1.0. No network access.
   --repeat <number>               Requested occurrences, clamped to XSD bounds (1)
   --choice <strategy>             first, smallest, random, all (default: first)
   --coverage                     Prefer unexplored choice branches; bounded by count
+  --reach <path>                  Path the document must contain, such as /{urn:o}order/{urn:o}item[2]; repeatable
   --locale <tag>                  Locale values: de or en (default: none)
   --date <ISO date>               Locale reference date (2026-01-15T12:00:00Z)
   --values <file.json>            Value lists keyed by /Root/Element, /Root/@attr or type name
@@ -97,6 +101,7 @@ export async function run(
   io: CliOutput = { stdout: (s) => process.stdout.write(s), stderr: (s) => process.stderr.write(s) },
   validator?: XmlValidator,
 ): Promise<number> {
+  if (argv[0] === 'invalid') return invalid(argv.slice(1), io, validator);
   if (argv.some((arg) => arg === '--profile' || arg.startsWith('--profile='))) {
     io.stderr('--profile was replaced by --locale: use --locale en or --locale de for readable values\n');
     return 1;
@@ -124,6 +129,7 @@ export async function run(
         'max-nodes': { type: 'string' },
         choice: { type: 'string' },
         coverage: { type: 'boolean' },
+        reach: { type: 'string', multiple: true },
         locale: { type: 'string' },
         date: { type: 'string' },
         values: { type: 'string' },
@@ -214,6 +220,7 @@ export async function run(
         'first',
       ),
       ...(flags.locale !== undefined ? { locale: flags.locale } : {}),
+      ...(flags.reach !== undefined ? { reach: flags.reach } : {}),
       coverage: flags.coverage ?? false,
       validate: !(flags['no-validate'] ?? false),
       fillElements: !(flags['no-element-values'] ?? false),
@@ -338,6 +345,172 @@ export async function run(
         `Choice coverage is incomplete: ${batch.coverage.covered}/${batch.coverage.total} encountered branches.\n`,
       );
       return 2;
+    }
+    return 0;
+  } catch (error) {
+    io.stderr(`${error instanceof Error ? error.message : String(error)}\n`);
+    return 1;
+  }
+}
+
+const INVALID_HELP = `xsd-faker invalid <entry.xsd> --out-dir <directory> [options]
+
+Generate invalid samples: valid samples, each changed to break one rule of the schema, judged by the validator.
+Confirmed samples are written as files; manifest.json lists every sample with its status.
+
+  --out-dir <directory>           New directory for the samples and manifest.json (required)
+  --root <name>                   Local name, prefix:name or {namespace}name
+  --rules <list>                  Comma-separated rules (default: all), such as facet:pattern,structure:order
+  --per-path <number>             Samples per rule and place in the schema (default: 1)
+  --max-files <number>            Samples in all, chosen evenly across the rules (default: 500)
+  --keep-unconfirmed              Also write samples that are not confirmed, under unconfirmed/
+  --count <number>                Valid samples to start from (1..1000; default: 1)
+  --coverage                     Start from samples that cover the choices; bounded by count
+  --seed <number>                 Reproducible starting seed (default: 1)
+  --optional-elements <mode>      none, all, random (default: all)
+  --optional-attributes <mode>    none, all, random (default: all)
+  --repeat <number>               Requested occurrences, clamped to XSD bounds (1)
+  --choice <strategy>             first, smallest, random (default: first)
+  --reach <path>                  Path the valid samples must contain; repeatable
+  --locale <tag>                  Locale values: de or en (default: none)
+  --values <file.json>            Value lists keyed by /Root/Element, /Root/@attr or type name
+  --base-dir <directory>          Allowed schema directory (entry directory)
+  --help                         Show this help
+
+Rules: ${RULES.join(', ')}.
+Exit codes: 0 completed, 1 input/runtime error, 2 no valid sample to start from.
+`;
+
+async function invalid(argv: string[], io: CliOutput, validator?: XmlValidator): Promise<number> {
+  try {
+    const { values: flags, positionals } = parseArgs({
+      args: argv,
+      allowPositionals: true,
+      options: {
+        help: { type: 'boolean' },
+        root: { type: 'string' },
+        'out-dir': { type: 'string' },
+        rules: { type: 'string' },
+        'per-path': { type: 'string' },
+        'max-files': { type: 'string' },
+        'keep-unconfirmed': { type: 'boolean' },
+        count: { type: 'string' },
+        coverage: { type: 'boolean' },
+        seed: { type: 'string' },
+        'optional-elements': { type: 'string' },
+        'optional-attributes': { type: 'string' },
+        repeat: { type: 'string' },
+        choice: { type: 'string' },
+        reach: { type: 'string', multiple: true },
+        locale: { type: 'string' },
+        values: { type: 'string' },
+        'base-dir': { type: 'string' },
+      },
+    });
+    if (flags.help) {
+      io.stdout(INVALID_HELP);
+      return 0;
+    }
+    if (positionals.length !== 1 || !positionals[0]) throw new TypeError('provide one entry XSD; see invalid --help');
+    if (!flags['out-dir']) throw new TypeError('--out-dir is required');
+    const entry = positionals[0];
+    const rules = flags.rules?.split(',').map((rule) => rule.trim());
+    for (const rule of rules ?? []) {
+      if (!RULES.includes(rule as Rule)) throw new TypeError(`unknown rule ${rule}; rules are ${RULES.join(', ')}`);
+    }
+    const perRuleAndPath = integer('per-path', flags['per-path']);
+    const maxFiles = integer('max-files', flags['max-files']);
+    const options = {
+      count: integer('count', flags.count) ?? 1,
+      coverage: flags.coverage ?? false,
+      seed: integer('seed', flags.seed) ?? 1,
+      repeat: integer('repeat', flags.repeat) ?? 1,
+      optionalElements: enumeration<OptionalMode>(
+        'optional-elements',
+        flags['optional-elements'],
+        ['none', 'all', 'random'],
+        'all',
+      ),
+      optionalAttributes: enumeration<OptionalMode>(
+        'optional-attributes',
+        flags['optional-attributes'],
+        ['none', 'all', 'random'],
+        'all',
+      ),
+      choice: enumeration<'first' | 'smallest' | 'random'>(
+        'choice',
+        flags.choice,
+        ['first', 'smallest', 'random'],
+        'first',
+      ),
+      ...(rules ? { rules: rules as Rule[] } : {}),
+      ...(perRuleAndPath !== undefined ? { perRuleAndPath } : {}),
+      ...(maxFiles !== undefined ? { maxFiles } : {}),
+      ...(flags.reach !== undefined ? { reach: flags.reach } : {}),
+      ...(flags.root ? { root: flags.root } : {}),
+      ...(flags.locale !== undefined ? { locale: flags.locale } : {}),
+      ...(flags.values ? { samples: readValues(flags.values) } : {}),
+    };
+    const access = flags['base-dir'] ? { baseDirectory: flags['base-dir'] } : {};
+    const matrix = await generateInvalidSamples(fileInput(entry, access), {
+      ...options,
+      ...(validator ? { validator } : {}),
+    });
+    if (matrix.bases === 0) {
+      io.stderr('No files written: no valid sample to start from.\n');
+      return 2;
+    }
+    const directory = resolve(flags['out-dir']);
+    try {
+      mkdirSync(directory);
+    } catch (error) {
+      if (error && typeof error === 'object' && 'code' in error && error.code === 'EEXIST') {
+        throw new Error(`output directory already exists: ${directory}; choose a new --out-dir`, { cause: error });
+      }
+      throw error;
+    }
+    try {
+      const keep = flags['keep-unconfirmed'] ?? false;
+      if (keep) mkdirSync(join(directory, 'unconfirmed'));
+      let written = 0;
+      const samples = matrix.samples.map((sample, i) => {
+        const name = `${String(i + 1).padStart(4, '0')}-${sample.rule.replace(':', '-')}.xml`;
+        const file = sample.status === 'confirmed' ? name : keep ? `unconfirmed/${name}` : null;
+        if (file !== null) {
+          writeFileSync(join(directory, file), sample.xml, { flag: 'wx' });
+          written += 1;
+        }
+        const { xml: _xml, tree: _tree, ...entryOf } = sample;
+        void _xml;
+        void _tree;
+        return { number: i + 1, file, ...entryOf, expected: 'invalid' };
+      });
+      writeFileSync(
+        join(directory, 'manifest.json'),
+        `${JSON.stringify(
+          {
+            package: { name: 'xsd-faker', version: PACKAGE_VERSION },
+            generation: options,
+            entry: basename(entry),
+            counts: matrix.counts,
+            bases: matrix.bases,
+            skipped: matrix.skipped,
+            samples,
+            notConstructible: matrix.notConstructible,
+          },
+          null,
+          2,
+        )}\n`,
+        { flag: 'wx' },
+      );
+      const c = matrix.counts;
+      io.stderr(
+        `Wrote ${written} files and manifest.json to ${directory}: ${c.confirmed} confirmed, ${c['other-cause']} other cause, ` +
+          `${c.accepted} accepted, ${c['not-checkable']} not checkable, ${c['not-constructible']} not constructible.\n`,
+      );
+    } catch (error) {
+      rmSync(directory, { recursive: true, force: true });
+      throw error;
     }
     return 0;
   } catch (error) {

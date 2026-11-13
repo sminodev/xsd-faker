@@ -1,7 +1,8 @@
 # API
 
-The package exports `generateSample`, `generateSamples`, `listRoots`, serializers and value-source
-helpers. `xsd-faker/node` adds `generateSampleFile`, `generateSampleFiles`, `listRootsFile` and `fileInput`.
+The package exports `generateSample`, `generateSamples`, `listRoots`, `generateInvalidSamples`, serializers and
+value-source helpers, and the building blocks of [invalid samples](invalid.md#building-blocks). `xsd-faker/node`
+adds `generateSampleFile`, `generateSampleFiles`, `listRootsFile` and `fileInput`.
 The generated declarations in `dist/` are the complete TypeScript reference. File examples below run
 from the repository root after `npm run build`; use your own schema paths in a consumer project.
 
@@ -67,6 +68,7 @@ refers to it, and a member is chosen.
 | `nil`                            | `never`                  | `random` writes nillable elements as `xsi:nil="true"` with chance one half; `never` draws no random numbers                                                                                                                            |
 | `repeat`                         | `1`                      | Desired occurrences, bounded by XSD minimum and maximum                                                                                                                                                                                |
 | `choice`                         | `first`                  | `first`, `smallest`, `random`, `{ prefer: [...] }`, or a strategy function                                                                                                                                                             |
+| `reach`                          | none                     | Paths the document has to contain, such as `/{urn:o}Order/{urn:o}Line[2]/@{}id`; see [Paths](#paths)                                                                                                                                   |
 | `maxDepth`                       | `12`                     | Optional-element expansion depth; root is depth zero. Must be lower than `maxTotalDepth`; without it, the default is lowered below `maxTotalDepth`                                                                                     |
 | `maxTotalDepth`                  | `64`                     | Hard depth limit, including required elements                                                                                                                                                                                          |
 | `maxNodes`                       | `10000`                  | Hard element-count limit                                                                                                                                                                                                               |
@@ -125,12 +127,13 @@ The CLI uses the same generation defaults. Its differently named flags map as fo
 | `--base-dir`                                               | `baseDirectory` (file access only)                                   |
 | `--max-file-bytes`, `--max-total-bytes`, `--max-documents` | `limits.maxFileBytes`, `limits.maxTotalBytes`, `limits.maxDocuments` |
 | `--schema-location none\|relative\|absolute`               | `schemaLocation` (resolved path, or omitted for `none`)              |
+| `--reach` (repeatable)                                     | `reach`                                                              |
 
 The manifest records the generation options as given; `locale` appears in it only when `--locale` is set.
 
 `values` replaces the locale; `samples` is tried before either source. To compose more sources, use
 `firstOf`. `referenceDate` only affects a locale. `coverage: true`
-uses its own choice strategy and overrides `choice`. CLI JSON settings have no effect with `--format xml`.
+uses its own choice strategy and overrides `choice`; decisions fixed by `reach` stay fixed. CLI JSON settings have no effect with `--format xml`.
 
 ## Errors
 
@@ -176,6 +179,7 @@ nor document. A warning describes a limitation and leaves the status alone.
 | `identity-planning`                                                     | error or warning | An ID or reference that cannot be planned or resolved (error); identity constraints, entities and notations that are not planned (warning) |
 | `template-only`                                                         | warning          | Template output, not an accepted test instance                                                                                             |
 | `json-mapping`                                                          | warning          | The compact JSON form is unavailable for this sample; the XML stays valid                                                                  |
+| `unreachable-path`                                                      | warning          | A path of `reach` that the document does not contain                                                                                       |
 
 ## Result
 
@@ -222,8 +226,9 @@ correct. Failed candidates can consume a later seed. Do not use nondeterministic
 must be reproducible. `fixed` and `default` values on generated declarations bypass the source.
 
 `localeValues(locale, { referenceDate, fields })` falls back to facet values itself, so it can end a `firstOf`
-chain. `defineLocale`, `extendLocale`, `localeFromFaker` and the locale types are exported by `xsd-faker` as well as
-`xsd-faker-locales`; `FIELD_KEYS` lists the fields.
+chain. `xsd-faker` also exports everything of the locale package it installs: `defineLocale`, `extendLocale`,
+`localeFromFaker`, the locales `de` and `en` and the locale types; `LOCALES` holds the built-in locales by tag and
+`FIELD_KEYS` lists the fields.
 
 A value-list key that starts with `/` is a local-name path, not XPath; `/Order/@version` identifies an
 attribute. `{namespace}local` names a simple type with its namespace, and any other key names a type by its
@@ -294,6 +299,58 @@ a named type or group that several elements use therefore counts once. For examp
 `Supplier` both have the type `Party`, whose content chooses `Street` or `POBox`, a sample with
 `Customer/Street` and another with `Supplier/POBox` complete that choice; `Customer/POBox` need not
 appear in any sample.
+
+## Paths
+
+`reach` takes paths the document has to contain. Along each path, the generator takes the optional elements that
+lead to it, the branch of each choice, the member of a substitution group and the `xsi:type` alternative that
+lead to the next step, and as many occurrences as its position asks for. An optional attribute at the end of a
+path is written. Elsewhere `optional*`, `choice` and `repeat` decide as usual:
+
+```js
+const sample = await generateSampleFile('examples/retail/order.xsd', {
+  reach: ['/{urn:example:order}Order/{urn:example:order}Line[2]/{urn:example:order}Packaging'],
+});
+```
+
+A step is `{ns}local`, `{}local` for no namespace, or a bare `local` that matches any namespace, as in the paths
+of `samples`; `@` marks an attribute, which only the last step may name, and `[n]` the position among siblings of
+that name, from 1. A path the schema does not allow gives the warning `unreachable-path`, and the document is
+generated without it. Without `reach`, no random number is drawn differently.
+
+With `coverage`, the decisions along the paths are fixed and coverage plans only the others. A fixed decision
+appears in `sample.choices` with `fixed: true` and counts neither as covered nor as open, so `complete` speaks for
+the other decisions. To cover the branches inside a request but never the response next to it:
+
+```js
+const batch = await generateSampleFiles('message.xsd', {
+  count: 4,
+  coverage: true,
+  reach: ['/{urn:example:message}Message/{urn:example:message}Request'],
+});
+```
+
+## Invalid samples
+
+`generateInvalidSamples(input, options)` changes valid samples so that each breaks one rule of the schema and
+returns them with the validator's judgement; [Invalid samples](invalid.md) describes the rules, the status of a
+sample, the limits and the manifest of `xsd-faker invalid`.
+
+The parts of the matrix are exported on their own; [Building blocks](invalid.md#building-blocks) describes them:
+
+| Export                                                                       | What it does                                                                     |
+| ---------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| `RULES`                                                                      | the rules in their order; types `Rule`, `ValueRule`, `NilRule`, `IdentityRule`   |
+| `parseExpandedPath`, `formatExpandedPath`                                    | read and write the text form of a path; types `ExpandedPath`, `ExpandedStep`     |
+| `generateViolatingValue`                                                     | a value that breaks one facet of `ValueFacets` and keeps the others              |
+| `applyTreeMutation`                                                          | one change to a copy of an instance tree, with the elements and lines around it  |
+| `classifyVerdict`, `parseDiagnostic`                                         | the status of a changed document from the validator's messages, one message read |
+| `mapNamespaces`                                                              | a copy of an instance tree in other namespaces                                   |
+| types `InvalidMatrix`, `InvalidSample`, `NotConstructible`, `InvalidOptions` | the result and the options of `generateInvalidSamples`                           |
+
+`validateXml` judges many documents against one compiled schema: it validates them in batches and gives each
+document its own verdict, with the messages a run of that document alone would give. Where the output of a batch
+cannot be attributed to its documents, each document is validated alone.
 
 ## Filesystem boundary
 

@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns="urn:example:rule" targetNamespace="urn:example:rule"
+  elementFormDefault="qualified">
+  <xs:element name="order">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="id" type="xs:string"/>
+        <xs:element name="note1" type="xs:string" minOccurs="0"/>
+        <xs:element name="note2" type="xs:string" minOccurs="0"/>
+        <xs:element name="note3" type="xs:string" minOccurs="0"/>
+        <xs:element name="note4" type="xs:string" minOccurs="0"/>
+        <xs:element name="note5" type="xs:string" minOccurs="0"/>
+        <xs:element name="note6" type="xs:string" minOccurs="0"/>
+        <xs:element name="note7" type="xs:string" minOccurs="0"/>
+        <xs:element name="note8" type="xs:string" minOccurs="0"/>
+        <xs:element name="note9" type="xs:string" minOccurs="0"/>
+        <xs:element name="note10" type="xs:string" minOccurs="0"/>
+        <xs:element name="note11" type="xs:string" minOccurs="0"/>
+        <xs:element name="date" type="xs:date"/>
+        <xs:element name="session">
+          <xs:complexType>
+            <xs:sequence>
+              <xs:choice>
+                <xs:element name="token" type="xs:string"/>
+                <xs:element name="password" type="xs:string"/>
+              </xs:choice>
+              <xs:element name="token" type="xs:string" minOccurs="0"/>
+            </xs:sequence>
+          </xs:complexType>
+        </xs:element>
+        <xs:element name="payment">
+          <xs:complexType>
+            <xs:choice>
+              <xs:element name="card" type="xs:string"/>
+              <xs:sequence>
+                <xs:element name="voucher" type="xs:string" minOccurs="0"/>
+              </xs:sequence>
+            </xs:choice>
+          </xs:complexType>
+        </xs:element>
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+</xs:schema>

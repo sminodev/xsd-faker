@@ -143,9 +143,28 @@ Four identifiers of the German health system get a valid check digit, in every l
 | `id.lanr` | six digits, a check digit and a specialty code | digits 1 to 6 weighted 4, 9, 4, 9, …; 10 minus the sum modulo 10, 0 for 10                      |
 | `id.pzn`  | eight digits, such as `27580899`               | digits weighted 1 to 7, modulo 11; a remainder of 10 is never issued                            |
 
-The other digits come from the schema's pattern when it gives the identifier's form, so a fixed part of the
-pattern stays; otherwise they are random. A KVNR never repeats a digit more than three times in a row and
-never contains `666`. An enumeration on the type comes first.
+A generated identifier should not be the number of a real person or institution. Two of them have a range
+that is never issued, and their values come from there:
+
+- A KVNR has one digit four times in a row or `666` among its digits 2 to 9, such as `J222256102`. The rule
+  by which KVNRs are allocated excludes such numbers. The prefix `X0000` is left out, because test cards of
+  the electronic health card use it.
+- An IK starts with 97, 98 or 99, the classification reserved for internal use, which is never issued, such
+  as `979865620`. Where the schema's pattern demands another start, such as `10` for a health insurance
+  fund, the IK is `109500969` if the pattern allows it. That IK exists for tests of the statutory health
+  insurance and belongs to no real payer.
+
+LANR and PZN have no such range. Their values have a valid check digit in the issued range and may be the
+number of a real physician or product. So may a KVNR or IK where twenty drafts from the test range do not
+fit the facets: a pattern that allows no run of four equal digits and no `666`, or an IK pattern that allows
+neither 97 to 99 nor `109500969`. A KVNR draft from the test range takes the letter and the other digits from
+the schema's pattern and repeats one of those digits, so a pattern such as `[A-Z][1-5]{8}[0-9]` keeps to the
+test range too. The digits of the issued range come from the schema's pattern when it gives the identifier's
+form, so a fixed part of the pattern stays; otherwise they are random. An enumeration on the type comes
+first.
+
+Where a document must hold agreed test numbers, list them in `samples` by path or type name, as for
+[domain values](#domain-values); listed values come before the locale.
 
 ## Free text
 
@@ -177,13 +196,18 @@ starting with `/` a path. A type key also applies to restrictions of that type, 
 
 ## Adding a locale
 
-A locale is plain data in the shape of `LocaleData`: `person`, `address`, `contact` and `text`. Its types
-are exported by `xsd-faker-locales` and by `xsd-faker`. `defineLocale(tag, data)` checks the data and
+Everything for locales comes from `xsd-faker`: `defineLocale`, `extendLocale`, `localeFromFaker`, the
+built-in locales `de` and `en`, `LOCALES` by tag and the types. The data lives in the package
+`xsd-faker-locales`, which is installed with xsd-faker; import from it directly only in a tool that uses the
+data without xsd-faker.
+
+A locale is plain data in the shape of `LocaleData`: `person`, `address`, `contact` and `text`.
+`defineLocale(tag, data)` checks the data and
 returns a frozen locale; with `extends`, the data only needs the parts that differ. Objects fall back field
 by field, arrays are replaced as a whole, so a list never mixes two languages:
 
 ```js
-import { defineLocale, de } from 'xsd-faker-locales';
+import { defineLocale, de } from 'xsd-faker';
 import { generateSampleFile } from 'xsd-faker/node';
 
 const deCH = defineLocale('de-CH', {
@@ -210,7 +234,7 @@ patch)` returns a copy of a locale with some data replaced; with `{ arrays: 'app
 to the existing ones instead:
 
 ```js
-import { extendLocale, en } from 'xsd-faker-locales';
+import { extendLocale, en } from 'xsd-faker';
 
 const office = extendLocale(en, { person: { title: ['Dr.', 'Prof.', 'Rev.'] } });
 const more = extendLocale(en, { person: { lastName: ['Okafor', 'Lindqvist'] } }, { arrays: 'append' });
@@ -265,7 +289,8 @@ otherwise:
 
 ```js
 import { de as fakerDe } from '@faker-js/faker';
-import { localeFromFaker } from 'xsd-faker-locales';
+import { localeFromFaker } from 'xsd-faker';
+import { generateSampleFile } from 'xsd-faker/node';
 
 const locale = localeFromFaker(fakerDe, { tag: 'de-x-faker' });
 const sample = await generateSampleFile('order.xsd', { locale });

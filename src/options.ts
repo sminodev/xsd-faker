@@ -2,6 +2,7 @@ import type { GenerateOptions } from './index.js';
 import { checkTextProperty } from './json/serialize.js';
 import { localeValues, referenceInstant } from './values/locale/index.js';
 import { effectiveLimits } from './xsd/schema-set.js';
+import { parseExpandedPath } from './mutate/path.js';
 function integer(name: string, value: number | undefined, min: number, max: number): void {
   if (value !== undefined && (!Number.isSafeInteger(value) || value < min || value > max)) {
     throw new RangeError(`${name} must be an integer from ${min} to ${max}`);
@@ -36,6 +37,13 @@ export function checkOptions(options: GenerateOptions): void {
     localeValues(options.locale, { ...(options.localeFields ? { fields: options.localeFields } : {}) });
   if (options.referenceDate !== undefined) referenceInstant(options.referenceDate);
   if (options.samples !== undefined) checkSamples(options.samples);
+  if (options.reach !== undefined) {
+    if (!Array.isArray(options.reach)) throw new TypeError('reach must be an array of paths');
+    for (const path of options.reach as unknown[]) {
+      if (typeof path !== 'string') throw new TypeError('reach must be an array of paths');
+      parseExpandedPath(path);
+    }
+  }
   // Optional expansion must stop before the hard limit, or every recursive schema would end in depth-limit.
   if (options.maxDepth !== undefined && options.maxDepth >= (options.maxTotalDepth ?? 64)) {
     throw new RangeError('maxDepth must be lower than maxTotalDepth');

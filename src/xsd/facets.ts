@@ -35,12 +35,19 @@ export interface Facets {
   fractionDigits?: number;
   /** A non-numeric bound that still requires final validator checks. */
   unsupportedBounds?: boolean;
+  /** The non-numeric bounds as written, each of them; values are not generated within them. */
+  otherBounds?: OtherBound[];
   /** The whiteSpace facet; without it, the built-in type decides. */
   whiteSpace?: 'preserve' | 'replace' | 'collapse';
   /** The item type of a list. */
   item?: Facets;
   /** The member types of a union. */
   members?: Facets[];
+}
+
+export interface OtherBound {
+  facet: 'minInclusive' | 'minExclusive' | 'maxInclusive' | 'maxExclusive';
+  lexical: string;
 }
 
 /** A simple type given by name or as an anonymous xs:simpleType element. */
@@ -179,13 +186,36 @@ export function enumerationScope(facets: Facets, value: string): Element | undef
 }
 
 /** The tighter of two bounds: for a lower bound the larger value, for an upper bound the smaller one. */
-function tighter(a: Bound | undefined, b: Bound, lower: boolean): Bound {
+export function tighter(a: Bound | undefined, b: Bound, lower: boolean): Bound {
   if (a === undefined) {
     return b;
   }
   const order = compareDecimal(b.lexical ?? String(b.value), a.lexical ?? String(a.value)) ?? b.value - a.value;
   if (order === 0) return { ...a, exclusive: a.exclusive || b.exclusive };
   return (lower ? order > 0 : order < 0) ? b : a;
+}
+
+/** The facets of a built-in type: the value range of the integer types, the item type and minimum of a list type. */
+export function builtinFacets(local: string): Facets {
+  const item = LISTS[local];
+  if (item !== undefined) {
+    return { builtin: local, variety: 'list', patterns: [], minLength: 1, item: builtinFacets(item) };
+  }
+  const facets: Facets = { builtin: local, variety: 'atomic', patterns: [] };
+  const range = INTEGERS[local];
+  if (range?.min !== undefined) {
+    facets.min = { value: range.min, exclusive: false };
+  }
+  if (range?.max !== undefined) {
+    facets.max = { value: range.max, exclusive: false };
+  }
+  if (local === 'long') {
+    facets.min = { value: Number('-9223372036854775808'), lexical: '-9223372036854775808', exclusive: false };
+    facets.max = { value: Number('9223372036854775807'), lexical: '9223372036854775807', exclusive: false };
+  } else if (local === 'unsignedLong') {
+    facets.max = { value: Number('18446744073709551615'), lexical: '18446744073709551615', exclusive: false };
+  }
+  return facets;
 }
 
 export class FacetReader {
@@ -263,25 +293,7 @@ export class FacetReader {
 
   /** A built-in type, with the value range of the integer types. */
   private builtin(local: string): Facets {
-    const item = LISTS[local];
-    if (item !== undefined) {
-      return { builtin: local, variety: 'list', patterns: [], minLength: 1, item: this.builtin(item) };
-    }
-    const facets: Facets = { builtin: local, variety: 'atomic', patterns: [] };
-    const range = INTEGERS[local];
-    if (range?.min !== undefined) {
-      facets.min = { value: range.min, exclusive: false };
-    }
-    if (range?.max !== undefined) {
-      facets.max = { value: range.max, exclusive: false };
-    }
-    if (local === 'long') {
-      facets.min = { value: Number('-9223372036854775808'), lexical: '-9223372036854775808', exclusive: false };
-      facets.max = { value: Number('9223372036854775807'), lexical: '9223372036854775807', exclusive: false };
-    } else if (local === 'unsignedLong') {
-      facets.max = { value: Number('18446744073709551615'), lexical: '18446744073709551615', exclusive: false };
-    }
-    return facets;
+    return builtinFacets(local);
   }
 
   /** Applies the facets of one restriction step to the facets of its base. */
@@ -348,6 +360,7 @@ export class FacetReader {
       case 'maxExclusive': {
         if (!isNumeric(facets.builtin)) {
           facets.unsupportedBounds = true;
+          facets.otherBounds = [...(facets.otherBounds ?? []), { facet: name, lexical: trimXmlSpace(value) }];
           this.problems.warning('unsupported', `${name} on xs:${facets.builtin} is not supported`, this.at(node));
           return;
         }

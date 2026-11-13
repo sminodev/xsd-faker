@@ -32,6 +32,7 @@ export const PROBLEM_CODES = [
   'template-only',
   'json-mapping',
   'identity-planning',
+  'unreachable-path',
 ] as const;
 
 export type ProblemCode = (typeof PROBLEM_CODES)[number];
