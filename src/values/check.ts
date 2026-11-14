@@ -7,7 +7,15 @@ import { compareDecimal } from './decimal.js';
 import { lexicalRegExp } from './lexical.js';
 import { splitXmlSpace, trimXmlSpace } from '../xml/space.js';
 
+/**
+ * Keeps up to PATTERN_CACHE_LIMIT compiled patterns, with the most recently used last.
+ * Evicted patterns are recompiled when needed.
+ */
 const patternCache = new Map<string, RegExp>();
+export const PATTERN_CACHE_LIMIT = 1024;
+
+/** How many compiled patterns the cache holds; for tests. */
+export const patternCacheSize = (): number => patternCache.size;
 
 /** One regular expression for the patterns of all restriction steps. */
 export function patternRegExp(steps: readonly (readonly string[])[]): RegExp {
@@ -15,8 +23,11 @@ export function patternRegExp(steps: readonly (readonly string[])[]): RegExp {
   let regex = patternCache.get(key);
   if (regex === undefined) {
     regex = new RegExp(combinePatterns(steps.map((step) => step.map((p) => translateBody(p)))), 'u');
-    patternCache.set(key, regex);
+    if (patternCache.size >= PATTERN_CACHE_LIMIT) patternCache.delete(patternCache.keys().next().value as string);
+  } else {
+    patternCache.delete(key);
   }
+  patternCache.set(key, regex);
   return regex;
 }
 
@@ -133,14 +144,14 @@ export function normalizeSpace(facets: Facets, value: string): string {
   return mode === 'replace' ? replaced : trimXmlSpace(replaced.replace(/ +/g, ' '));
 }
 
-/** The member of a union that reads a value: the first that accepts it, in the declared order. */
+/** First union member that accepts the value, in declaration order. */
 function acceptingMember(facets: Facets, value: string): Facets | undefined {
   return (facets.members ?? []).find((member) => checkValue(member, value) === undefined);
 }
 
 /**
- * The value as the validator reads it: after the whitespace rule of its type, and for a union as the first member
- * that accepts it normalizes it. Unions have no whiteSpace rule of their own.
+ * Normalizes a value using its type's whitespace rule. A union uses its first accepting member because
+ * unions have no whiteSpace rule of their own.
  */
 export function settledValue(facets: Facets, value: string): string {
   const normalized = normalizeSpace(facets, value);
@@ -152,8 +163,8 @@ export function settledValue(facets: Facets, value: string): string {
 }
 
 /**
- * Whether a value is an xs:float or xs:double value, whose JSON number is checked against its binary value: by its
- * type, for a union by the member that reads it, for a list only if all items agree.
+ * Binary numeric type used to check JSON conversion. A union uses its first accepting member;
+ * a list has a binary type only if all items agree.
  */
 export function binaryKind(facets: Facets, value: string): 'float' | 'double' | undefined {
   if (facets.variety === 'list') {

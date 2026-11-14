@@ -1,6 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import type { Facets } from '../xsd/facets.js';
-import { binaryKind, checkValue, digitCounts, settledValue } from './check.js';
+import {
+  binaryKind,
+  checkValue,
+  digitCounts,
+  PATTERN_CACHE_LIMIT,
+  patternCacheSize,
+  patternRegExp,
+  settledValue,
+} from './check.js';
 
 const atomic = (builtin: string, extra: Partial<Facets> = {}): Facets => ({
   builtin,
@@ -161,5 +169,19 @@ describe('XML white space only', () => {
     const list: Facets = { builtin: 'anySimpleType', variety: 'list', patterns: [], item: atomic('token'), length: 2 };
     expect(checkValue(list, 'a\u00a0b c')).toBeUndefined();
     expect(checkValue(atomic('integer'), '\u00a01')).toEqual(expect.any(String));
+  });
+});
+
+describe('the cache of compiled patterns', () => {
+  it('keeps at most its limit across many schemas, and gives the same expression for a pattern used again', () => {
+    const first = patternRegExp([['[A-Z]{2}0']]);
+    for (let n = 0; n < PATTERN_CACHE_LIMIT * 2; n += 1) patternRegExp([[`[A-Z]{2}${n}`]]);
+    expect(patternCacheSize()).toBe(PATTERN_CACHE_LIMIT);
+    const again = patternRegExp([['[A-Z]{2}0']]);
+    expect(again.source).toBe(first.source);
+    expect(['AB0', 'AB', 'ab0'].map((v) => again.test(v))).toEqual([true, false, false]);
+    // Reusing an entry protects it from eviction; the least recently used entry is removed first.
+    for (let n = 0; n < PATTERN_CACHE_LIMIT - 1; n += 1) patternRegExp([[`x${n}`]]);
+    expect(patternRegExp([['[A-Z]{2}0']])).toBe(again);
   });
 });
