@@ -241,6 +241,8 @@ export class SchemaSet {
     attributeGroup: new Map(),
   };
   private readonly read: (path: string) => string | SchemaText | undefined;
+  /** Locations to hand libxml2 in plain form, by document, until the document is loaded. */
+  private readonly plainForms = new Map<string, { node: Element; location: string; relative: string }[]>();
 
   constructor(
     source: SchemaSource,
@@ -334,6 +336,7 @@ export class SchemaSet {
           continue;
         }
         const include = child.localName === 'include';
+        this.plain(path, child, location);
         const target = this.load(resolvePath(path, location), at, include ? doc.targetNamespace : undefined);
         if (target && !include && (attr(child, 'namespace') ?? '') !== target.targetNamespace) {
           this.problems.error('namespace-mismatch', `import namespace does not match ${target.path}`, at);
@@ -351,6 +354,7 @@ export class SchemaSet {
         this.problems.error('unsupported-redefine', 'xs:override is not supported', at);
       }
     }
+    this.writePlainForms(path, root);
     return doc;
   }
 
@@ -365,6 +369,7 @@ export class SchemaSet {
       this.problems.error('missing-file', 'xs:redefine without schemaLocation', at);
       return;
     }
+    this.plain(doc.path, node, location);
     const target = this.load(resolvePath(doc.path, location), at, doc.targetNamespace);
     if (target && target.targetNamespace !== doc.targetNamespace) {
       this.problems.error(
@@ -437,6 +442,78 @@ export class SchemaSet {
   }
 
   /** The text of a schema file, read and checked once; undefined after a reported problem. */
+  /**
+   * Hands libxml2 a location in its plain form. It reads `sub/../leaf.xsd` only where a directory `sub` exists, and
+   * none does when no file of it is part of the schema set; so the text it validates names the same file as
+   * `leaf.xsd`, relative to the document, the way the loader resolved it.
+   */
+  private plain(path: string, node: Element, location: string): void {
+    if (isAbsoluteUri(location) || isAbsoluteUri(path) || location.startsWith('/')) return;
+    const target = resolvePath(path, location);
+    const from = path.split('/').slice(0, -1);
+    const to = target.split('/');
+    let common = 0;
+    while (common < from.length && common < to.length - 1 && from[common] === to[common]) common += 1;
+    const relative = [...from.slice(common).map(() => '..'), ...to.slice(common)].join('/');
+    if (relative === location) return;
+    const list = this.plainForms.get(path) ?? [];
+    list.push({ node, location, relative });
+    this.plainForms.set(path, list);
+  }
+
+  /**
+   * Writes the plain locations into the text libxml2 validates. The start tags of the text are matched to the
+   * elements of the parsed document in document order, so the attribute of exactly that xs:import, xs:include or
+   * xs:redefine changes, whatever its prefix and however its value is written; the new value is escaped and no line
+   * moves. A location that cannot be written so is reported instead of failing later in libxml2.
+   */
+  private writePlainForms(path: string, root: Element): void {
+    const pending = this.plainForms.get(path);
+    const text = this.sourceTexts.get(path);
+    if (!pending || text === undefined) return;
+    this.plainForms.delete(path);
+    const elements: Element[] = [];
+    const walk = (element: Element) => {
+      elements.push(element);
+      for (let child = element.firstChild; child; child = child.nextSibling) {
+        if (child.nodeType === 1) walk(child as Element);
+      }
+    };
+    walk(root);
+    const tags = startTags(text);
+    const edits: { start: number; end: number; value: string }[] = [];
+    for (const { node, location, relative } of pending) {
+      const index = elements.indexOf(node);
+      const tag = tags?.length === elements.length ? tags[index] : undefined;
+      const attribute = tag?.attributes.find((a) => a.name === 'schemaLocation');
+      const raw = attribute && text.slice(attribute.start, attribute.end);
+      if (
+        !tag ||
+        !attribute ||
+        raw === undefined ||
+        /[\r\n]/.test(raw) ||
+        tag.name.split(':').pop() !== node.localName
+      ) {
+        this.problems.error(
+          'unsupported',
+          `${path}: the location ${location} cannot be handed to the validator as ${relative}`,
+          { file: path, node },
+        );
+        continue;
+      }
+      edits.push({
+        start: attribute.start,
+        end: attribute.end,
+        value: escapeAttributeValue(relative, attribute.quote),
+      });
+    }
+    let out = text;
+    for (const edit of edits.sort((a, b) => b.start - a.start)) {
+      out = out.slice(0, edit.start) + edit.value + out.slice(edit.end);
+    }
+    this.sourceTexts.set(path, out);
+  }
+
   private text(path: string, at: At): string | undefined {
     const known = this.sourceTexts.get(path);
     if (known !== undefined) {
@@ -551,4 +628,82 @@ export class SchemaSet {
     const root = node.ownerDocument?.documentElement;
     return root ? this.byRoot.get(root) : undefined;
   }
+}
+
+/** A value for an attribute in the given quotes. */
+function escapeAttributeValue(value: string, quote: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(quote === '"' ? /"/g : /'/g, quote === '"' ? '&quot;' : '&apos;');
+}
+
+interface StartTag {
+  name: string;
+  /** each attribute with the span of its raw value, between the quotes */
+  attributes: { name: string; start: number; end: number; quote: string }[];
+}
+
+/**
+ * The start tags of a well-formed XML text, in document order, with the raw spans of their attribute values;
+ * comments, CDATA sections, processing instructions and the DOCTYPE are skipped. Undefined for text it cannot read.
+ */
+function startTags(text: string): StartTag[] | undefined {
+  const tags: StartTag[] = [];
+  const space = /[ \t\r\n]/;
+  let i = 0;
+  const after = (marker: string, from: number) => {
+    const at = text.indexOf(marker, from);
+    return at < 0 ? -1 : at + marker.length;
+  };
+  while ((i = text.indexOf('<', i)) >= 0) {
+    if (text.startsWith('<!--', i)) i = after('-->', i + 4);
+    else if (text.startsWith('<![CDATA[', i)) i = after(']]>', i + 9);
+    else if (text.startsWith('<?', i)) i = after('?>', i + 2);
+    else if (text.startsWith('</', i)) i = after('>', i + 2);
+    else if (text.startsWith('<!', i)) {
+      // A DOCTYPE, with an internal subset in brackets and quoted literals.
+      let depth = 0;
+      let k = i + 2;
+      for (; k < text.length; k += 1) {
+        const c = text.charAt(k);
+        if (c === '"' || c === "'") k = text.indexOf(c, k + 1);
+        else if (c === '[') depth += 1;
+        else if (c === ']') depth -= 1;
+        else if (c === '>' && depth === 0) break;
+        if (k < 0) return undefined;
+      }
+      i = k + 1;
+    } else {
+      let k = i + 1;
+      while (k < text.length && !space.test(text.charAt(k)) && text.charAt(k) !== '/' && text.charAt(k) !== '>') k += 1;
+      const tag: StartTag = { name: text.slice(i + 1, k), attributes: [] };
+      for (;;) {
+        while (space.test(text.charAt(k))) k += 1;
+        const c = text.charAt(k);
+        if (c === '>' || c === '') break;
+        if (c === '/') {
+          k += 1;
+          continue;
+        }
+        const nameStart = k;
+        while (k < text.length && !space.test(text.charAt(k)) && text.charAt(k) !== '=') k += 1;
+        const name = text.slice(nameStart, k);
+        while (space.test(text.charAt(k))) k += 1;
+        if (text.charAt(k) !== '=') return undefined;
+        k += 1;
+        while (space.test(text.charAt(k))) k += 1;
+        const quote = text.charAt(k);
+        if (quote !== '"' && quote !== "'") return undefined;
+        const end = text.indexOf(quote, k + 1);
+        if (end < 0) return undefined;
+        tag.attributes.push({ name, start: k + 1, end, quote });
+        k = end + 1;
+      }
+      tags.push(tag);
+      i = k + 1;
+    }
+    if (i <= 0) return undefined;
+  }
+  return tags;
 }
