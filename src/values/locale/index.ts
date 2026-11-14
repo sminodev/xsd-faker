@@ -1,6 +1,5 @@
-// Values from a locale: names, addresses, dates, contact details, identifiers and free text that read like real
-// data, where the names of the schema say what a value means. Every candidate is checked against the facets; a
-// value the locale cannot give comes from the facets alone.
+// Supplies locale values for recognized fields, checking each candidate against the facets. Falls back to
+// facet generation for unrecognized fields or when no locale candidate fits.
 
 import { de, defineLocale, en, type LocaleData } from 'xsd-faker-locales';
 import { checkValue } from '../check.js';
@@ -19,11 +18,11 @@ export { FIELD_KEYS, type FieldKey } from './fields.js';
 export const LOCALES: Readonly<Record<string, LocaleData>> = Object.freeze({ de, en });
 
 export interface LocaleOptions {
-  /** The day dates are counted from. Fixed by default, so that a seed gives the same document tomorrow. */
+  /** Reference date, fixed by default for reproducible output. */
   referenceDate?: string;
   /**
-   * The field a value is for, where the names of the schema do not say it or say something else. Keys are paths
-   * and type names as for value lists; `null` leaves a value to the facets.
+   * Overrides field recognition using the same path and type-name keys as value lists.
+   * `null` selects facet generation for that field.
    */
   fields?: Readonly<Record<string, FieldKey | null>>;
 }
@@ -33,8 +32,8 @@ const DEFAULT_REFERENCE_DATE = '2026-01-15T12:00:00Z';
 const DRAWS = 8;
 
 /**
- * The locale for a tag: a built-in one, or the nearest one up the tag's chain, so `de-CH` falls back to `de`. A
- * locale object is checked like one given to `defineLocale`, so a mistake names its path.
+ * Resolves a built-in tag with subtag fallback, such as de-CH to de. Locale objects are validated
+ * with `defineLocale`, which identifies invalid fields by path.
  */
 export function resolveLocale(locale: string | LocaleData): LocaleData {
   if (typeof locale === 'object' && locale !== null) {
@@ -55,8 +54,8 @@ const ISO =
   /^(\d{4})-(\d{2})-(\d{2})(?:T([01]\d|2[0-3]):([0-5]\d)(?::([0-5]\d)(?:\.\d{1,3})?)?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)?)?$/;
 
 /**
- * The reference date as an instant. Only an ISO date such as `2026-01-15` or an ISO timestamp such as
- * `2026-01-15T12:00:00Z` that names a real day is one; anything else is a `TypeError`.
+ * Parses a reference date or timestamp, such as `2026-01-15` or `2026-01-15T12:00:00Z`.
+ * Throws a `TypeError` for invalid dates or unsupported formats.
  */
 export function referenceInstant(referenceDate: string | undefined): Date {
   const text = referenceDate ?? DEFAULT_REFERENCE_DATE;
@@ -64,7 +63,9 @@ export function referenceInstant(referenceDate: string | undefined): Date {
   const [year, month, day] = [Number(parts?.[1]), Number(parts?.[2]), Number(parts?.[3])];
   const real =
     parts !== null && month >= 1 && month <= 12 && day >= 1 && day <= new Date(Date.UTC(year, month, 0)).getUTCDate();
-  const instant = new Date(text);
+  // Interpret timestamps without a time zone as UTC, matching date-only input on every machine.
+  const local = parts?.[4] !== undefined && !/(?:Z|[+-]\d{2}:\d{2})$/.test(text);
+  const instant = new Date(local ? `${text}Z` : text);
   if (!real || !Number.isFinite(instant.getTime())) {
     throw new TypeError(`referenceDate must be an ISO date or timestamp, such as 2026-01-15; got ${String(text)}`);
   }
@@ -105,8 +106,7 @@ const ascii = (text: string): string =>
     .replace(/[^a-z0-9]/g, '');
 
 /**
- * Values from a locale, with facet values for everything the locale does not cover. A candidate that fails the
- * facets is drawn again, a few times, before the facets take over.
+ * Creates a locale value source with bounded retries and a fallback to facet generation.
  */
 export function localeValues(locale: string | LocaleData, options: LocaleOptions = {}): ValueSource {
   const data = resolveLocale(locale);
@@ -127,7 +127,7 @@ export function localeValues(locale: string | LocaleData, options: LocaleOptions
   const person = (context: ValueContext) => record(context, 'person', (rng) => drawPerson(data, rng));
   const address = (context: ValueContext) => record(context, 'address', (rng) => drawAddress(data, rng));
 
-  /** The locale's list for a field whose further occurrences in one element take further values. */
+  /** List used to supply distinct values for repeated fields within an element. */
   function listOf(key: FieldKey, context: ValueContext): readonly string[] | undefined {
     const { person: p, address: a } = data;
     switch (key) {

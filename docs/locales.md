@@ -118,7 +118,8 @@ gender with an enumeration takes the code it spells for that gender, such as `w`
 
 ## Dates
 
-Dates are relative to `referenceDate`. Birth dates are one to ninety years earlier. End, expiry and due
+Dates are relative to `referenceDate`, an ISO date or timestamp; a timestamp without a time zone, such as
+`2026-01-15T00:30:00`, is read as UTC, so the machine's time zone does not change the values. Birth dates are one to ninety years earlier. End, expiry and due
 dates are up to two years later; other dates are up to two years earlier. Words such as `Ende`, `Ablauf`,
 `bis`, `end`, `until` or `expiry` identify future dates even without `datum` or `date` in the name:
 `GueltigBis`, `Leistungsende` and `validUntil` produce future dates for both built-in date types and

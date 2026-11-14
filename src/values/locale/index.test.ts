@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { createRng } from '../../rng.js';
 import type { Facets } from '../../xsd/facets.js';
 import type { ValueContext, ValueScope } from '../source.js';
-import { localeValues, resolveLocale } from './index.js';
+import { localeValues, referenceInstant, resolveLocale } from './index.js';
 import { drawAddress, drawPerson, fill, forGender, formsFor } from './records.js';
 
 const text = (extra: Partial<Facets> = {}): Facets => ({
@@ -226,6 +226,26 @@ describe('localeValues: nesting, repetition and empty lists', () => {
     }
     for (const date of ['2026-01-15', '2026-01-15T12:00:00Z', '2026-01-15T12:00+01:00']) {
       expect(() => localeValues(de, { referenceDate: date }), date).not.toThrow();
+    }
+  });
+});
+
+describe('referenceInstant', () => {
+  it('reads a timestamp without a time zone as UTC, whatever the time zone of the machine', () => {
+    const zone = process.env.TZ;
+    try {
+      for (const tz of ['UTC', 'Pacific/Kiritimati', 'America/Los_Angeles']) {
+        process.env.TZ = tz;
+        expect(referenceInstant('2026-01-15T00:30:00').toISOString(), tz).toBe('2026-01-15T00:30:00.000Z');
+        expect(referenceInstant('2026-01-15T00:30').toISOString(), tz).toBe('2026-01-15T00:30:00.000Z');
+        expect(referenceInstant('2026-01-15').toISOString(), tz).toBe('2026-01-15T00:00:00.000Z');
+        expect(referenceInstant('2026-01-15T00:30:00Z').toISOString(), tz).toBe('2026-01-15T00:30:00.000Z');
+        expect(referenceInstant('2026-01-15T00:30:00+14:00').toISOString(), tz).toBe('2026-01-14T10:30:00.000Z');
+        expect(() => referenceInstant('2026-02-30T00:30:00'), tz).toThrow(TypeError);
+      }
+    } finally {
+      if (zone === undefined) delete process.env.TZ;
+      else process.env.TZ = zone;
     }
   });
 });
