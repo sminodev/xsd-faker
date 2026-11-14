@@ -10,12 +10,45 @@ export interface Verdict {
   lines?: (number | undefined)[];
 }
 export type XmlValidator = (schema: SchemaFiles, documents: readonly string[]) => Promise<Verdict[]>;
+
+/**
+ * Runs the validator and checks for exactly one verdict per document, with a boolean `valid` and an `errors`
+ * array of strings. Throws `TypeError` for malformed results so callers cannot mistake them for validation.
+ */
+export async function judge(
+  validator: XmlValidator,
+  schema: SchemaFiles,
+  documents: readonly string[],
+): Promise<Verdict[]> {
+  const verdicts: unknown = await validator(schema, documents);
+  const fail = (problem: string): never => {
+    throw new TypeError(`validator must return exactly one explicit verdict per document: ${problem}`);
+  };
+  if (!Array.isArray(verdicts)) return fail(`got ${typeof verdicts} instead of an array`);
+  if (verdicts.length !== documents.length) {
+    return fail(`${documents.length} documents, ${verdicts.length} verdicts`);
+  }
+  for (let k = 0; k < verdicts.length; k += 1) {
+    const verdict: unknown = Object.hasOwn(verdicts, k) ? verdicts[k] : undefined;
+    if (typeof verdict !== 'object' || verdict === null) return fail(`no verdict for document ${k + 1}`);
+    const { valid, errors } = verdict as { valid?: unknown; errors?: unknown };
+    if (typeof valid !== 'boolean') return fail(`valid of document ${k + 1} is not a boolean`);
+    // Require an own string entry at each index; array iteration methods skip holes and can read inherited entries.
+    const strings =
+      Array.isArray(errors) &&
+      Array.from({ length: errors.length }, (_, i) => i).every(
+        (i) => Object.hasOwn(errors, i) && typeof errors[i] === 'string',
+      );
+    if (!strings) return fail(`errors of document ${k + 1} is not an array of strings`);
+  }
+  return verdicts as Verdict[];
+}
 export class SchemaCompileError extends Error {
   override name = 'SchemaCompileError';
 }
 /** The default of 32 MiB is too small for documents that `maxNodes` allows. */
 const MAX_MEMORY_GIB = 2;
-/** One validator run takes at most this many documents, and more only while they stay below the byte limit. */
+/** Maximum documents per validator run; the batch also ends when the next document would exceed BATCH_BYTES. */
 const BATCH_DOCUMENTS = 200;
 const BATCH_BYTES = 8 * 1024 * 1024;
 

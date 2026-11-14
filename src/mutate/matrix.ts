@@ -6,7 +6,7 @@ import type { Element } from '@xmldom/xmldom';
 import type { ChoiceOccurrence, ElementFacts, ValueFacts } from '../generate/walker.js';
 import { occurs } from '../generate/walker.js';
 import { createRng, type Rng } from '../rng.js';
-import type { Verdict, XmlValidator } from '../validate/xmllint.js';
+import { judge, type Verdict, type XmlValidator } from '../validate/xmllint.js';
 import { generateValue } from '../values/generate.js';
 import type { SerializeOptions } from '../xml/serialize.js';
 import { splitXmlSpace } from '../xml/space.js';
@@ -25,14 +25,14 @@ import { applicableValueRules, violatingValue } from './value.js';
 export interface InvalidOptions {
   /** Only these rules. Default: all. */
   rules?: readonly Rule[];
-  /** At most this many samples for one rule at one place of the schema. Default: 1. */
+  /** Maximum samples per rule and schema path. Default: 1. */
   perRuleAndPath?: number;
-  /** At most this many samples in all, chosen evenly across the rules. Default: 500. */
+  /** Maximum total samples, distributed across rules. Default: 500. */
   maxFiles?: number;
 }
 
 export interface InvalidSample {
-  /** the rule the change breaks */
+  /** the rule the change is intended to break; status records whether it was confirmed */
   rule: Rule;
   /** the changed node, exact, in text form */
   path: string;
@@ -41,7 +41,7 @@ export interface InvalidSample {
   /** the value the change wrote */
   value?: string;
   status: ConfirmationStatus;
-  /** what the validator said, by line of the document */
+  /** validation diagnostics with document line numbers */
   diagnostics: { message: string; line?: number }[];
   /** why a sample is not confirmed */
   reason?: string;
@@ -69,7 +69,7 @@ export interface InvalidMatrix {
   skipped: number;
 }
 
-/** A valid sample with what the schema says about its nodes. */
+/** A valid sample with schema metadata for its nodes. */
 export interface Base {
   tree: InstanceElement;
   seed: number;
@@ -147,10 +147,9 @@ async function applyChanges(bases: readonly Base[], context: MatrixContext, opti
 }
 
 /**
- * Chooses the changes within the limits. Each key, one rule at one place, gives up to `perKey` changes; beyond
- * `maxFiles`, every rule gives up its share in turn, in an order the random source decides. A change that cannot be
- * made gives its turn to the next change of the same key, and a key whose changes all fail gives it to the next key
- * of the same rule. `skipped` counts the changes never tried.
+ * Selects up to `perKey` mutations per rule/path and `maxFiles` overall, rotating across rules in seeded order.
+ * Failed candidates are replaced by another candidate for the same key, then another key of the same rule.
+ * `skipped` counts candidates excluded by the limits without being tried.
  */
 export async function selectChanges<C extends { rule: Rule }, R>(
   byKey: ReadonlyMap<string, readonly C[]>,
@@ -584,7 +583,7 @@ function childPath(path: readonly ExpandedStep[], parent: InstanceElement, child
   return [...path, { ns: child.ns, name: child.name, ...(position > 1 ? { position } : {}) }];
 }
 
-/** An attribute the element must not have: one a restriction prohibits, or one its type does not know. */
+/** An attribute prohibited by a restriction or absent from the type. */
 function unknownAttribute(
   element: InstanceElement,
   content: ElementFacts['content'],
@@ -615,7 +614,7 @@ function unknownAttribute(
   return undefined;
 }
 
-/** A global type the element may not name with xsi:type: a complex type outside its alternatives. */
+/** A global complex type outside the element's allowed xsi:type alternatives. */
 function foreignType(set: SchemaSet, facts: ElementFacts): { ns: string; name: string } | undefined {
   const allowed = new Set((facts.types?.candidates ?? []).map((c) => c.node));
   for (const component of set.components.complexType.values()) {
@@ -643,7 +642,7 @@ function derivesFrom(set: SchemaSet, type: Component, base: Component, seen = ne
   return false;
 }
 
-/** The first element a particle gives, by expanded name. */
+/** Expanded name of the first element produced by a particle. */
 function firstElement(
   set: SchemaSet,
   node: Element,
@@ -738,12 +737,11 @@ export async function runMatrix(
     const verdicts: Verdict[] =
       applied.length === 0
         ? []
-        : await context.validator(
+        : await judge(
+            context.validator,
             context.schemas,
             applied.map((a) => a.xml),
           );
-    if (verdicts.length !== applied.length)
-      throw new TypeError('validator must return exactly one verdict per document');
     const known = new Map<Base, Identity[]>();
     const samples = applied.map(({ candidate, mutation, xml }, i): InvalidSample => {
       const verdict = verdicts[i] as Verdict;

@@ -20,7 +20,7 @@ function checkSamples(samples: unknown): void {
     }
   }
 }
-/** The message for the option that `locale` replaced; an old call fails instead of losing its values silently. */
+/** Migration error for the removed `profile` option. */
 export const PROFILE_REPLACED =
   'profile was replaced by locale: use locale (en or de) for readable values, samples for values of your own';
 
@@ -68,6 +68,15 @@ export function checkOptions(options: GenerateOptions): void {
   }
   if (options.indent !== undefined && !/^[ \t]{0,8}$/.test(options.indent)) {
     throw new TypeError('indent must contain up to eight spaces or tabs');
+  }
+  // JavaScript callers can bypass the types; reject non-booleans before truthiness checks use them.
+  for (const name of ['validate', 'coverage', 'fillElements', 'fillAttributes']) {
+    const value = (options as Record<string, unknown>)[name];
+    if (value !== undefined && typeof value !== 'boolean') throw new TypeError(`${name} must be true or false`);
+  }
+  const json: unknown = options.json;
+  if (json !== undefined && json !== false && (typeof json !== 'object' || json === null || Array.isArray(json))) {
+    throw new TypeError('json must be false or an object of JSON options');
   }
   if (options.json && options.json.mode !== undefined && !['compact', 'tree'].includes(options.json.mode)) {
     throw new TypeError('json.mode must be compact or tree');

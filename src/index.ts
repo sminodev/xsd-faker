@@ -21,7 +21,7 @@ import { toJson, JsonMappingError, type JsonOptions, type JsonValue } from './js
 import { checkOptions } from './options.js';
 import { parseExpandedPath } from './mutate/path.js';
 import { createRng } from './rng.js';
-import { validateXml, type SchemaFiles, type Verdict, type XmlValidator } from './validate/xmllint.js';
+import { judge, validateXml, type SchemaFiles, type Verdict, type XmlValidator } from './validate/xmllint.js';
 import { listed, valueLists, type ValueLists } from './values/lists.js';
 import { localeValues, type FieldKey } from './values/locale/index.js';
 import type { LocaleData } from 'xsd-faker-locales';
@@ -135,9 +135,9 @@ export interface GenerateOptions extends LoadOptions {
   values?: ValueSource;
   /** Values from a locale, by tag such as `de` or `en`, or a locale from `defineLocale`. Default: none. */
   locale?: string | LocaleData;
-  /** The day a locale counts dates from. */
+  /** Reference date for locale-generated dates. */
   referenceDate?: string;
-  /** The field a locale gives a value for, by path or type name, where the names of the schema do not tell. */
+  /** Overrides locale field recognition by path or type name. */
   localeFields?: Readonly<Record<string, FieldKey | null>>;
   /** Values by path or type name, tried before every other source. */
   samples?: ValueLists;
@@ -159,7 +159,7 @@ export interface GenerateInput {
   files: SchemaSource;
   entry: string;
 }
-/** Options of reading the schema set, shared by generation and the root listing. */
+/** Schema-loading options shared by generation and root discovery. */
 export interface LoadOptions {
   /** Size limits of the schema input; see `SchemaLimits`. */
   limits?: SchemaLimits;
@@ -235,8 +235,7 @@ export function listRoots(
   }
 }
 /**
- * A schema that nests deeper than the call stack reaches is a `resource-limit`, never a RangeError leaving the API;
- * there is no schema and no document then.
+ * Converts stack exhaustion during schema traversal to a `resource-limit` error.
  */
 function tooDeep(error: unknown): unknown {
   if (!(error instanceof RangeError) || !/call stack/i.test(error.message)) return error;
@@ -341,7 +340,7 @@ function source(options: GenerateOptions): ValueSource {
 }
 /** Called after each attempt with its branch trace and status; coverage uses it to plan the next choices. */
 type AttemptObserver = (choices: Sample['choices'], status: SampleStatus) => void;
-/** The facts of the walker for each sample, where a caller asks for them. */
+/** Optional schema metadata collected by the walker for each sample. */
 type FactsBySample = Map<Sample, Map<object, ElementFacts | ValueFacts>>;
 async function generatePrepared(
   prepared: Prepared,
@@ -428,11 +427,8 @@ async function generatePrepared(
     let errors: string[] = [];
     if (validate) {
       const cached = known?.get(xml);
-      const verdicts = cached ? [cached] : await (options.validator ?? validateXml)(prepared.schemas, [xml]);
-      const verdict = verdicts[0];
-      if (verdicts.length !== 1 || !verdict || typeof verdict.valid !== 'boolean' || !Array.isArray(verdict.errors)) {
-        throw new TypeError('validator must return exactly one explicit verdict per document');
-      }
+      const [verdict] = cached ? [cached] : await judge(options.validator ?? validateXml, prepared.schemas, [xml]);
+      if (!verdict) throw new TypeError('validator must return exactly one explicit verdict per document');
       valid = verdict.valid;
       errors = verdict.errors;
     }
@@ -612,13 +608,11 @@ async function batch(
         ahead.add(next);
         drafts.push((await generatePrepared(prepared, { ...options, seed: next, validate: false })).xml);
       }
-      const verdicts = await (options.validator ?? validateXml)(prepared.schemas, drafts);
-      if (verdicts.length === drafts.length) {
-        drafts.forEach((xml, k) => {
-          const verdict = verdicts[k];
-          if (verdict) judged.set(xml, verdict);
-        });
-      }
+      const verdicts = await judge(options.validator ?? validateXml, prepared.schemas, drafts);
+      drafts.forEach((xml, k) => {
+        const verdict = verdicts[k];
+        if (verdict) judged.set(xml, verdict);
+      });
     }
     const sample = await generatePrepared(
       prepared,
@@ -679,8 +673,8 @@ async function batch(
 export interface InvalidSampleOptions extends BatchOptions, InvalidOptions {}
 
 /**
- * Invalid samples, each made from a valid one by a change that breaks one rule of the schema, and judged by the
- * validator. Optional elements and attributes default to `all`, so that more of the schema can be broken.
+ * Generates and validates samples intended to violate one schema rule each. Optional elements and attributes
+ * default to `all` to expose more rules for mutation.
  */
 export async function generateInvalidSamples(
   input: GenerateInput,
@@ -694,6 +688,8 @@ export async function generateInvalidSamples(
 }
 
 async function invalid(input: GenerateInput, options: InvalidSampleOptions): Promise<InvalidMatrix> {
+  // Validate supplied options before the defaults below override json and the optional modes.
+  checkOptions(options);
   if (options.mode === 'template' || options.validate === false) {
     throw new TypeError('invalid samples require validated instance mode');
   }
@@ -705,7 +701,6 @@ async function invalid(input: GenerateInput, options: InvalidSampleOptions): Pro
       : {}),
     json: false,
   };
-  checkOptions(settings);
   const prepared = prepare(input, settings);
   let facts: FactsBySample = new Map();
   let samples: Sample[];

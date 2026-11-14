@@ -197,7 +197,9 @@ Inspect `status`, `errors` and `problems` before using a result:
 presence of `xml`, as the generation result. `valid` can be true while `status` is `incomplete`,
 for example when an unresolved value happens to leave a schema-valid empty string. Operational validator
 failures reject the promise instead
-of being returned as a successful sample. A custom validator must return one explicit verdict per input.
+of being returned as a successful sample. A custom validator must return an array with one explicit verdict per
+input, each with a boolean `valid` and `errors` as an array of strings. Any other answer rejects with a `TypeError`,
+for single and batch generation and for invalid samples alike.
 
 `jsonStatus` is `generated`, `unavailable` or `not-requested`. A JSON collision does not make otherwise
 valid XML invalid: it makes the compact JSON unavailable. The CLI refuses a request for JSON or paired
