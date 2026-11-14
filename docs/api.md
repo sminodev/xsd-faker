@@ -78,8 +78,8 @@ refers to it, and a member is chosen.
 | `validator`                      | libxml2/WASM             | Explicit alternative XML validator callback                                                                                                                                                                                            |
 | `values`                         | facet generator          | Custom value source; replaces `locale`                                                                                                                                                                                                 |
 | `locale`                         | none                     | Locale values: a tag such as `de` or `en`, or a locale from `defineLocale`; see [Locales](locales.md)                                                                                                                                  |
-| `referenceDate`                  | `2026-01-15T12:00:00Z`   | The day a locale counts dates from                                                                                                                                                                                                     |
-| `localeFields`                   | none                     | The field a locale fills, by path or type name; `null` leaves a value to the facets; see [Locales](locales.md#fields)                                                                                                                  |
+| `referenceDate`                  | `2026-01-15T12:00:00Z`   | Reference date for locale-generated dates                                                                                                                                                                                              |
+| `localeFields`                   | none                     | Override locale field recognition by path or type name; `null` leaves a value to the facets; see [Locales](locales.md#fields)                                                                                                          |
 | `samples`                        | none                     | Value lists keyed by local-name paths or type names; tried before every other source                                                                                                                                                   |
 | `json`                           | compact projection       | `false` disables JSON; otherwise `JsonOptions`                                                                                                                                                                                         |
 | `indent`                         | two spaces               | XML indentation, up to eight spaces/tabs                                                                                                                                                                                               |
@@ -88,8 +88,8 @@ refers to it, and a member is chosen.
 | `fillElements`, `fillAttributes` | `true`                   | Setting either to false requires template mode                                                                                                                                                                                         |
 | `limits`                         | see meaning              | Schema input limits `{ maxFileBytes, maxTotalBytes, maxDocuments }`, defaults 4194304, 16777216 and 128; positive safe integers only. Also accepted by `listRoots` and the file API, which checks `maxFileBytes` before reading a file |
 
-`DEFAULT_LIMITS` holds the default limits. A schema reader of your own returns the text, or `{ text, bytes }`
-(`SchemaText`) to have the limits count the bytes of its file. It can throw `SchemaLimitError` for a file that is
+`DEFAULT_LIMITS` holds the default limits. A custom schema reader returns text, or `{ text, bytes }`
+(`SchemaText`) to count the original file size against the limits. It can throw `SchemaLimitError` for a file that is
 too large (`resource-limit`), `UnsafeLocationError` for a location it must not read (`unsafe-input`) and
 `SchemaEncodingError` for bytes it cannot decode (`invalid-xml` or `unsupported-encoding`); any other error is
 `missing-file`.
@@ -149,17 +149,17 @@ These rejections are distinct from a returned unsuccessful sample. For example, 
 
 ### Problem codes
 
-Each problem has a `code`, a `severity` and a message. An error prevents a completed status; when it comes from
-loading, from the root or from a resource limit, the call rejects with `GenerateError` and returns neither schema
-nor document. A warning describes a limitation and leaves the status alone.
+Each problem has a `code`, a `severity` and a message. Errors prevent a completed status. Loading, root-selection
+and resource-limit errors reject with `GenerateError` instead of returning a sample. Warnings describe limitations without
+changing the status.
 
 | Code                                                                    | Severity         | Meaning                                                                                                                                    |
 | ----------------------------------------------------------------------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
 | `missing-file`                                                          | error            | A schema document could not be found or read, or names a URI other than `file:`                                                            |
 | `invalid-xml`                                                           | error            | A schema document is not well-formed XML, has bytes that do not decode, a second byte order mark or text before its XML declaration        |
 | `unsupported-encoding`                                                  | error            | A schema file declares an encoding other than UTF-8, UTF-16, ISO-8859-1 or US-ASCII                                                        |
-| `unsafe-input`                                                          | error            | A location outside the boundary, or a DOCTYPE or entity outside the inert profile; nothing of it is read                                   |
-| `neutralized-doctype`                                                   | warning          | An inert DOCTYPE was left out before parsing and validation                                                                                |
+| `unsafe-input`                                                          | error            | A location outside the file-access boundary, or a DOCTYPE or entity outside the allowed inert subset                                       |
+| `neutralized-doctype`                                                   | warning          | An inert DOCTYPE was removed before parsing and validation                                                                                 |
 | `resource-limit`                                                        | error            | A size limit of the schema input, `maxNodes`, or nesting deeper than the generator can follow                                              |
 | `not-a-schema`                                                          | error            | The root of a schema document is not `xs:schema`                                                                                           |
 | `namespace-mismatch`                                                    | error            | An import, include or redefine does not match the target namespace of the document it reads                                                |
@@ -225,16 +225,16 @@ const sample = await generateSampleFile('examples/retail/order.xsd', { values: s
 correct. Failed candidates can consume a later seed. Do not use nondeterministic callbacks when fixtures
 must be reproducible. `fixed` and `default` values on generated declarations bypass the source.
 
-`localeValues(locale, { referenceDate, fields })` falls back to facet values itself, so it can end a `firstOf`
-chain. `xsd-faker` also exports everything of the locale package it installs: `defineLocale`, `extendLocale`,
+`localeValues(locale, { referenceDate, fields })` falls back to facet generation, so it can be the last
+source in a `firstOf` chain. `xsd-faker` also re-exports the locale package: `defineLocale`, `extendLocale`,
 `localeFromFaker`, the locales `de` and `en` and the locale types; `LOCALES` holds the built-in locales by tag and
 `FIELD_KEYS` lists the fields.
 
 A value-list key that starts with `/` is a local-name path, not XPath; `/Order/@version` identifies an
 attribute. `{namespace}local` names a simple type with its namespace, and any other key names a type by its
 local name. A value is looked up under its path, then its own type, then each type it derives from, nearest
-first; a key whose values all fail the facets passes on to the next one. A type key covers every place the
-type is used, also through an anonymous restriction of it:
+first. If none of a key's values satisfy the facets, lookup continues with the next key. A type key covers
+every use of the type, including anonymous restrictions:
 
 ```js
 const sample = await generateSampleFile('claim.xsd', {
@@ -272,20 +272,19 @@ console.log(batch.coverage);
 ```
 
 `count` is a hard bound from 1 to 1000. Coverage with template mode or `validate: false` rejects with
-`TypeError`. Each batch sample starts after the previous sample's returned seed, including failed
-attempts. Coverage prefers branches not yet accepted in validated XML, the less-tried one first. Among
-accepted branches it prefers the one leading to the most open branches of decisions already encountered
-below it, then the less-tried one. Ties keep declaration order; the strategy uses no randomness. Failed
-attempts do not count as covered. A branch not yet accepted that was part of two failed attempts yields
-to the other open branches, and to accepted branches leading to them, then is tried again; once accepted,
-it is treated like any other branch. A failed document does not show which branch caused the failure, so
-this changes only the order of attempts: the branch stays in `total` and in `uncovered`, and is never
-reported as unreachable. The report's scope is `encountered-choices`:
-optional content omitted from generation, unreachable types and combinations of branches are not
-claimed as covered. `complete` means at least one document was accepted and all branches of the
-encountered choices were accepted at least once. A batch without an accepted document is never
-complete. Inspect `total` as well: an accepted document with no encountered choices is complete with
-`total: 0`, which is no choice evidence.
+`TypeError`. Each sample starts after the previous sample's returned seed, including failed attempts.
+
+Coverage prefers branches not yet accepted in valid XML, starting with the least tried. It also revisits
+accepted branches that lead to uncovered choices. After two failed attempts, an uncovered branch is
+deprioritized in favour of other uncovered branches and accepted branches leading to them. Ties follow
+declaration order; selection is deterministic.
+Failures affect scheduling only: they never count as coverage or remove a branch from `total` and `uncovered`.
+
+The report's scope is `encountered-choices`. Omitted optional content, unreachable types and combinations
+of branches are outside that scope. `complete` requires at least one accepted document and an accepted
+sample for every branch of each encountered choice. A batch without an accepted document is never complete.
+An accepted document with no encountered choices is complete with `total: 0`; check `total` before treating
+that result as evidence of branch coverage.
 
 Choices include substitution groups and the types `xsi:type` can name: each allowed member or concrete
 type is a branch of the decision where it was encountered. A decision with a single alternative, such as an
@@ -316,11 +315,11 @@ const sample = await generateSampleFile('examples/retail/order.xsd', {
 A step is `{ns}local`, `{}local` for no namespace, or a bare `local` that matches any namespace, as in the paths
 of `samples`; `@` marks an attribute, which only the last step may name, and `[n]` the position among siblings of
 that name, from 1. A path the schema does not allow gives the warning `unreachable-path`, and the document is
-generated without it. Without `reach`, no random number is drawn differently.
+generated without it.
 
 With `coverage`, the decisions along the paths are fixed and coverage plans only the others. A fixed decision
-appears in `sample.choices` with `fixed: true` and counts neither as covered nor as open, so `complete` speaks for
-the other decisions. To cover the branches inside a request but never the response next to it:
+appears in `sample.choices` with `fixed: true` and counts neither as covered nor as open. `complete` therefore
+applies only to the remaining decisions. To cover the branches inside a request but never the response next to it:
 
 ```js
 const batch = await generateSampleFiles('message.xsd', {
@@ -336,21 +335,20 @@ const batch = await generateSampleFiles('message.xsd', {
 returns them with the validator's judgement; [Invalid samples](invalid.md) describes the rules, the status of a
 sample, the limits and the manifest of `xsd-faker invalid`.
 
-The parts of the matrix are exported on their own; [Building blocks](invalid.md#building-blocks) describes them:
+The matrix components are also exported individually; [Building blocks](invalid.md#building-blocks) describes them:
 
-| Export                                                                       | What it does                                                                     |
-| ---------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
-| `RULES`                                                                      | the rules in their order; types `Rule`, `ValueRule`, `NilRule`, `IdentityRule`   |
-| `parseExpandedPath`, `formatExpandedPath`                                    | read and write the text form of a path; types `ExpandedPath`, `ExpandedStep`     |
-| `generateViolatingValue`                                                     | a value that breaks one facet of `ValueFacets` and keeps the others              |
-| `applyTreeMutation`                                                          | one change to a copy of an instance tree, with the elements and lines around it  |
-| `classifyVerdict`, `parseDiagnostic`                                         | the status of a changed document from the validator's messages, one message read |
-| `mapNamespaces`                                                              | a copy of an instance tree in other namespaces                                   |
-| types `InvalidMatrix`, `InvalidSample`, `NotConstructible`, `InvalidOptions` | the result and the options of `generateInvalidSamples`                           |
+| Export                                                                       | What it does                                                                   |
+| ---------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| `RULES`                                                                      | the rules in their order; types `Rule`, `ValueRule`, `NilRule`, `IdentityRule` |
+| `parseExpandedPath`, `formatExpandedPath`                                    | read and write the text form of a path; types `ExpandedPath`, `ExpandedStep`   |
+| `generateViolatingValue`                                                     | a value that breaks one facet of `ValueFacets` and keeps the others            |
+| `applyTreeMutation`                                                          | apply a mutation to a copy of a tree and record its context and line numbers   |
+| `classifyVerdict`, `parseDiagnostic`                                         | classify a changed document or parse an individual diagnostic                  |
+| `mapNamespaces`                                                              | a copy of an instance tree in other namespaces                                 |
+| types `InvalidMatrix`, `InvalidSample`, `NotConstructible`, `InvalidOptions` | the result and the options of `generateInvalidSamples`                         |
 
-`validateXml` judges many documents against one compiled schema: it validates them in batches and gives each
-document its own verdict, with the messages a run of that document alone would give. Where the output of a batch
-cannot be attributed to its documents, each document is validated alone.
+`validateXml` validates documents in batches against one compiled schema and returns a separate verdict
+for each document. If batch diagnostics cannot be attributed reliably, the documents are validated individually.
 
 ## Filesystem boundary
 

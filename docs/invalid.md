@@ -1,10 +1,9 @@
 # Invalid samples
 
-A test suite needs documents a consumer must reject as well as documents it must accept. `generateInvalidSamples`
-starts from valid samples and changes each one so that it breaks one rule of the schema: a value that breaks one
-facet, a missing element, an unknown attribute and so on. The validator then judges every changed document, and
-its messages decide whether the document breaks exactly that rule. Only such confirmed documents are negative
-examples; the others are reported with the reason.
+`generateInvalidSamples` creates negative test cases by changing valid samples to violate one schema rule:
+a facet constraint, a required element, an attribute restriction or another supported rule. Each changed
+document is validated, and its diagnostics are checked against the intended violation. Only confirmed
+samples should be used as negative examples; other outcomes include a status and reason.
 
 ```sh
 npx xsd-faker invalid examples/retail/order.xsd --out-dir order-invalid --count 3 --coverage --seed 7
@@ -21,7 +20,7 @@ console.log(matrix.counts);
 ```
 
 The valid samples come from the usual options, `count`, `coverage`, `seed`, `reach` and the others. Optional
-elements and attributes default to `all` here, so that more of the schema can be broken; set them to `none` for
+elements and attributes default to `all` to expose more rules for mutation; set them to `none` for
 changes to required content only. Where all optional elements of a large schema exceed `maxNodes`, the default
 falls back to `none` for elements.
 
@@ -47,7 +46,7 @@ falls back to `none` for elements.
 | `identity:dangling-idref`                                                                                                                                                                                                       | an `xs:IDREF` or `xs:IDREFS` naming no ID of the document                                                                                            |
 
 `RULES` lists them in this order, which is also the order of the samples. Content admitted by a wildcard is not
-changed: the schema says nothing about it.
+changed by the matrix.
 
 A declaration with a fixed value has only the rule `value:fixed`, and a type with an enumeration only
 `facet:enumeration`: any other value breaks those first. The identity rules leave such values alone as well.
@@ -74,12 +73,12 @@ such as a changed ID that a reference names.
 | `accepted`      | the validator accepts it: the change did not break the schema as expected                                                                                      |
 | `not-checkable` | the validator cannot decide it: a message the classifier cannot read, or a rejection without a message                                                         |
 
-A message alone does not tell the rule. libxml2 reports a missing element `A` before `B` as `Element 'B': This
-element is not expected. Expected is ( A ).`, and a surplus element, a wrong order, an unknown element and a second
-branch with the same words. So each message is read together with the change: the element it names, on the line
-of that element, the value it quotes, and the elements around the change, such as the sibling after a removed
-element. The line tells two elements of one name apart. A message about the whole value of a list or union, an
-identity constraint without a value and an abstract declared type only accompany a message that states the rule;
+A diagnostic alone does not identify the violated rule. libxml2 reports a missing `A` before `B` as
+`Element 'B': This element is not expected. Expected is ( A ).` The same wording can indicate an extra
+element, incorrect order, an unknown element or a second choice branch. Classification therefore checks
+the element name, line number, quoted value and surrounding nodes against the mutation. Line numbers
+distinguish elements with the same name. Diagnostics about a whole list or union value, an identity
+constraint without a value or an abstract declared type must accompany a diagnostic identifying the rule;
 on their own they are `other-cause`. A value outside the lexical space of a union is the exception: libxml2
 reports only the message about the whole value, and that message states the rule.
 
@@ -89,14 +88,14 @@ a finding of the ID check is a second cause.
 
 ## Limits
 
-| Option           | Default | Meaning                                                                                        |
-| ---------------- | ------- | ---------------------------------------------------------------------------------------------- |
-| `rules`          | all     | only these rules                                                                               |
-| `perRuleAndPath` | `1`     | samples for one rule at one place of the schema, the path without positions                    |
-| `maxFiles`       | `500`   | samples in all; beyond it every rule gives up its share in turn, so all rules stay represented |
+| Option           | Default | Meaning                                                                     |
+| ---------------- | ------- | --------------------------------------------------------------------------- |
+| `rules`          | all     | only these rules                                                            |
+| `perRuleAndPath` | `1`     | samples for one rule at one place of the schema, the path without positions |
+| `maxFiles`       | `500`   | maximum total samples, distributed across rules                             |
 
-The choice is deterministic for a seed. A change that cannot be made, such as a second branch no document reaches,
-gives its turn to the next change of the same place, or of the same rule. `skipped` counts the planned changes
+Selection is deterministic for a seed. If a mutation cannot be constructed, another candidate is tried
+for the same rule and path, then for another path of the same rule. `skipped` counts the planned changes
 left out by the limits and never tried. All documents are validated against one compiled schema, in batches.
 
 ## The result
@@ -115,7 +114,7 @@ options.
 
 ## Building blocks
 
-The parts of the matrix are exported for tools of their own, such as a comparison of two versions of a schema.
+The matrix components are exported for use in other tools, such as schema-version comparisons.
 They work on the instance tree and on plain data, without the schema.
 
 ### Paths
@@ -166,10 +165,10 @@ copy, as `serializeXml` writes the changed tree with its default layout.
 
 ### Reading the validator
 
-`classifyVerdict(verdict, applied, { integrity })` gives the status of a changed document from the verdict of the
-validator, with each message read by `parseDiagnostic`. `integrity` are the findings of an ID check of the
-document: the reference of `identity:dangling-idref`, and for every other rule a second cause. `validateXml` gives
-each rejected document the line of each message in `lines`; the classifier compares them with `applied.lines`.
+`classifyVerdict(verdict, applied, { integrity })` classifies a changed document using the validator result.
+`parseDiagnostic` parses individual messages. `integrity` contains ID-check findings, which confirm
+`identity:dangling-idref` but count as another cause for other rules. `validateXml` returns diagnostic
+line numbers in `lines`; the classifier compares them with `applied.lines`.
 A document written in another layout than the default needs those lines for that layout; where `verdict.lines` is
 missing, messages are tied to the change by name and value only.
 

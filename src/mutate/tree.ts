@@ -1,6 +1,5 @@
-// Changes to an instance tree that break one rule of its schema: a value, a missing or surplus element, elements in
-// the wrong order, unknown content, xsi:nil and xsi:type. The input tree stays as it is; each change works on a
-// copy. What the change needs to know about the schema, such as how often an element may occur, the caller decides.
+// Applies mutations to a copy of an instance tree: values, element counts and order, unknown content, xsi:nil
+// and xsi:type. The caller supplies the schema constraints needed to choose a mutation; the input is unchanged.
 
 import { elementLines, type SerializeOptions } from '../xml/serialize.js';
 import type { InstanceElement } from '../xml/tree.js';
@@ -79,7 +78,7 @@ export type TreeMutationResult = AppliedMutation | { status: 'not-applicable'; r
 
 const name = (e: { ns: string; name: string }) => `{${e.ns}}${e.name}`;
 
-/** A path in words for a message; unlike the text form it can always be written. */
+/** Human-readable path for diagnostics, including paths that have no serializable form. */
 const described = (path: ExpandedPath): string =>
   path
     .map((step) => `/${step.attribute ? '@' : ''}${step.ns === undefined ? '' : `{${step.ns}}`}${step.name}`)
@@ -101,7 +100,7 @@ export function applyTreeMutation(tree: InstanceElement, mutation: TreeMutation)
   return mutate(tree, mutation, {});
 }
 
-/** The same, with the lines of the context for the layout the caller writes the tree in. */
+/** Applies a mutation and records context line numbers using the caller's serialization layout. */
 export function mutate(tree: InstanceElement, mutation: TreeMutation, layout: SerializeOptions): TreeMutationResult {
   const no = (reason: string): TreeMutationResult => ({ status: 'not-applicable', reason });
   if (typeof mutation !== 'object' || mutation === null || !OPS.has((mutation as { op?: unknown }).op as string)) {

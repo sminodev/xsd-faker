@@ -1,15 +1,13 @@
-// A locale from the locale data of faker-js, which the caller installs and imports. The object is read for its shape
-// alone: nothing here imports faker-js or depends on its types. Taken over are first names by gender, last names,
-// titles, street names, building number patterns, and where faker-js has cities, the cities with its states and
-// country; faker-js has no postcodes per city, so a city gets the locale's postcode pattern. Without cities, the
-// places come whole from the base locale. Everything else comes from the base locale too.
+// Adapts faker-js locale data without importing faker-js or depending on its types. Reads names, titles,
+// street names and building-number patterns. If cities are available, they use the locale's states, country
+// and postcode pattern. Otherwise the full address comes from the base locale, as does other missing data.
 
 import { defineLocale, ENTRY } from './locale.js';
 import { de } from './locales/de/index.js';
 import { en } from './locales/en/index.js';
 import type { DeepPartial, LocaleData, Place, Region } from './types.js';
 
-/** A list in faker-js: plain, or by gender. */
+/** A faker-js list, either flat or grouped by gender. */
 export type FakerList =
   | readonly string[]
   | { readonly generic?: readonly string[]; readonly female?: readonly string[]; readonly male?: readonly string[] };
@@ -41,7 +39,7 @@ export interface FakerOptions {
   country?: string | Region;
 }
 
-/** The usable entries of a list: strings, trimmed, without repeats and without any a locale cannot hold. */
+/** Trims and deduplicates string entries, dropping values invalid for locale data. */
 function clean(list: unknown): string[] {
   if (!Array.isArray(list)) return [];
   const out = new Set<string>();
@@ -123,8 +121,8 @@ export function localeFromFaker(definition: FakerLocaleDefinition, options: Fake
     const patterns = postcodes.length > 0 ? postcodes : ['#####'];
     address.places = cities.map((city): Place => ({ city, postcodes: patterns }));
     address.states = states;
-    // The country of the cities: the option, else the one of the metadata, named by the default country where
-    // faker-js has one. Without either it stays open; the base locale's country would not fit these cities.
+    // Use the explicit country or faker-js metadata, with the default country name if available.
+    // Do not borrow the base locale's country for cities from another source.
     const name = clean(location.default_country)[0];
     const option = options.country;
     const code = typeof option === 'string' ? option : (option?.code ?? clean([definition.metadata?.country])[0]);

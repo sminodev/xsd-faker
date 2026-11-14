@@ -1,6 +1,6 @@
-// ID and IDREF planning for one document. The walker records where IDs and references are written; afterwards IDs
-// are made unique and every reference gets an ID of the document that its facets allow, also one written later. An
-// own integrity check decides: the default validator, libxml2, does not check that references resolve.
+// Plans unique IDs and matching references for one document, including forward references. The walker records
+// each ID and reference before planning begins. A separate integrity check verifies references because libxml2
+// does not resolve them.
 
 import type { Rng } from '../rng.js';
 import { checkValue } from '../values/check.js';
@@ -26,8 +26,8 @@ export interface IdentitySlot {
 }
 
 /**
- * What a simple type means for planning: an ID, a reference, a list of references, or `unplanned` for references
- * inside a union or a list of unions, whose member the validator picks by the value.
+ * Identity role of a simple type. References in unions or lists of unions are `unplanned` because the
+ * accepting member depends on the value.
  */
 export function identityKind(facets: Facets): IdentityKind | 'unplanned' | undefined {
   if (facets.variety === 'atomic') {
@@ -65,8 +65,8 @@ function both(a: Facets, b: Facets): Facets {
 }
 
 /**
- * Plans the identities of a document in place. What it cannot solve, and slots that are not adjustable, stay as they
- * are; `checkIdentities` then reports them.
+ * Plans IDs and references in place. Unresolvable or non-adjustable slots are left unchanged for
+ * `checkIdentities` to report.
  */
 export function planIdentities(slots: readonly IdentitySlot[], rng: Rng): void {
   const live = slots.filter((slot) => slot.validated);

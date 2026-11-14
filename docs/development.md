@@ -1,7 +1,7 @@
 # Development
 
 Use Node.js 22.13 or later and `npm ci`. The package is TypeScript compiled to ES modules with `tsc`.
-The only runtime dependencies are `@xmldom/xmldom` and `xmllint-wasm`.
+Runtime dependencies are `@xmldom/xmldom`, `xmllint-wasm` and `xsd-faker-locales`.
 
 ## Source layout
 
@@ -21,17 +21,17 @@ src/
   xml/                 ordered instance tree and XML serialization
   json/serialize.ts    compact/tree JSON projection
   validate/xmllint.ts  explicit libxml2 verdicts, in batches against one compiled schema
-  mutate/              invalid samples: paths, violating values, tree changes, the classifier of libxml2
-                       messages, namespace mapping and the matrix that plans and judges the changes
+  mutate/              invalid samples: paths, violating values, tree changes, libxml2 message
+                       classification, namespace mapping, mutation planning and validation
 packages/locales/     the locale data package: types, defineLocale, extendLocale and the built-in locales
 ```
 
 `xsd/namechars.ts` holds the character classes of XML 1.0, Second Edition, Appendix B, which XML Schema 1.0
 uses for its name types and for `\i` and `\c`.
 
-The flow is `load → choose root → walk → plan IDs → describe values → serialize → validate`. Describing
-values records, for each simple value, what the validator reads and whether it is a float or double, so
-that JSON follows the type; compact JSON keys are planned in the walker from the content model. Locales
+The flow is `load → choose root → walk → plan IDs → describe values → serialize → validate`. Each simple
+value carries its normalized form and numeric type so JSON serialization preserves its value. The walker
+assigns compact JSON keys from the content model. Locales
 only suggest values. They do not change cardinality, choices, namespaces or the schema itself. The
 instance tree is the shared boundary between XML and JSON; do not add a second generator for the JSON
 path.
@@ -53,8 +53,8 @@ order. Typecheck and build compile the locale package first, because the library
 The `src/**/*.test.ts` and `packages/*/src/**/*.test.ts` suites use Vitest. They cover the parser, random
 source, facets, walker, alternatives, ID planning, the DOCTYPE profile, redefine, size limits, value lists,
 locales, serialization, validation and invalid samples. `test/rules/` holds one minimal schema per rule of
-the invalid samples; `src/mutate/gold.test.ts` requires every sample of each to be confirmed by the installed
-xmllint-wasm, whose version the package pins, so a validator that words a message differently fails there. The
+the invalid samples. `src/mutate/gold.test.ts` checks that the pinned version of xmllint-wasm confirms every
+sample, catching changes in diagnostic wording that could affect classification. The
 `XSD_CORPUS` suite runs only when that variable names a directory of schemas; otherwise no corpus tests
 are registered. Each generated corpus sample must have `status: 'valid'`, not just a positive validator
 verdict.
@@ -93,7 +93,7 @@ Both packages build themselves when packed, so a clean checkout after `npm ci` g
 the pair, `xsd-faker` and `xsd-faker-locales`, into a separate consumer project. Use the exported package paths,
 not imports from `src/`. Verify XML generation with the default validator on the supported Node
 versions. The package includes `dist/`, public documentation, synthetic examples, `LICENSE` and the npm manifest.
-Private reviews, test sources and working notes are excluded.
+Test sources are excluded.
 
 Publishing is not part of these scripts. Before a release, check the package name, repository metadata
 and version. Publish `xsd-faker-locales` first: `xsd-faker` depends on it, and its install fails until a matching

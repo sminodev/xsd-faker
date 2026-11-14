@@ -2,7 +2,7 @@
 // Supported are UTF-8 (the default), UTF-16 with a byte order mark, ISO-8859-1 (each byte its code point) and
 // US-ASCII. A replacement character never stands in for a byte that does not decode.
 
-/** Why the bytes of a schema file give no text: an encoding outside the supported set, or bytes that do not decode. */
+/** Unsupported encoding or invalid byte sequence in a schema file. */
 export class SchemaEncodingError extends Error {
   override name = 'SchemaEncodingError';
   constructor(
@@ -77,8 +77,8 @@ export function decodeSchema(bytes: Uint8Array, path: string): string {
 }
 
 /**
- * Where the XML declaration at the start of the bytes ends, after its `?>`, or 0 without one. The whole declaration
- * is read, however long, so that its encoding is never missed; one that does not end is no XML.
+ * Byte offset after the XML declaration's `?>`, or 0 if absent. Scans the full declaration so an encoding
+ * after a long whitespace run is still found. An unterminated declaration is invalid XML.
  */
 function declarationEnd(bytes: Uint8Array, path: string): number {
   const start = [0x3c, 0x3f, 0x78, 0x6d, 0x6c]; // <?xml

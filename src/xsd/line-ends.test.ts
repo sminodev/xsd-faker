@@ -26,7 +26,7 @@ describe('line ends of XML 1.0 in schema text', () => {
           const sample = await generateSample(input, { seed: 1 });
           expect(sample.status, `${facet} ${JSON.stringify(written)}`).toBe('valid');
           expect(sample.json).toBe(`a${raw}b`);
-          // The judge: libxml2 takes the character itself and refuses a space in its place.
+          // libxml2 accepts the original character and rejects a space in its place.
           const schemas = { entry: 's.xsd', files: new Map([['s.xsd', xsd]]) };
           const [same, space] = await validateXml(schemas, [`<r>a${raw}b</r>`, '<r>a b</r>']);
           expect([same?.valid, space?.valid]).toEqual([true, false]);

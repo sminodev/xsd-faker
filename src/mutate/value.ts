@@ -173,9 +173,8 @@ const VALUE_RULES: readonly ValueRule[] = [
 ];
 
 /**
- * The value rules a type has something to break for: its facets, its lexical space, a fixed value. A fixed value
- * admits one value and an enumeration a list of them, so any other value breaks that first; such a type has only
- * that rule.
+ * Applicable value rules for a type. Fixed values and enumerations take precedence because changing
+ * the value would violate those constraints as well as any targeted facet.
  */
 export function applicableValueRules(spec: ValueSpec): ValueRule[] {
   const f = spec.facets;
@@ -365,7 +364,7 @@ export function brokenFacets(spec: ValueSpec, value: string): Set<Broken> {
   return out;
 }
 
-/** A value of a union as the member that reads it normalizes it; unchanged where no member reads it. */
+/** Normalizes a union value using its first accepting member; leaves unmatched values unchanged. */
 function settled(facets: Facets, value: string): string {
   const member = memberOf(facets, value);
   if (!member) return value;
@@ -391,7 +390,7 @@ const special = (v: string): number | undefined =>
   v === 'INF' ? Infinity : v === '-INF' ? -Infinity : v === 'NaN' ? NaN : undefined;
 
 function bounds(facets: Facets, v: string, out: Set<Broken>): void {
-  // NaN is beside every bound; INF and -INF are compared as the largest and smallest value.
+  // NaN satisfies no bound; INF and -INF compare as the greatest and least values.
   const compare = (bound: Bound): number => {
     const value = special(v);
     if (value !== undefined || !Number.isFinite(bound.value)) return Math.sign((value ?? Number(v)) - bound.value);
@@ -638,7 +637,7 @@ const SPELLINGS = (f: Facets): boolean =>
       ? f.item !== undefined && SPELLINGS(f.item)
       : true;
 
-/** A value in other spellings of the same value, as far as they are easy to name. */
+/** Common alternative lexical representations of the same value. */
 function spellings(f: Facets, v: string): string[] {
   const out = new Set([v]);
   if (f.variety !== 'atomic') return [...out];
@@ -858,7 +857,7 @@ const STRING_DEPTH: Readonly<Record<string, number>> = {
   ENTITY: 5,
 };
 
-/** The family of built-in types whose facets can be merged: the numbers but float and double, the strings. */
+/** Facet-compatible type families: strings, and numeric types except float and double. */
 const family = (builtin: string): string =>
   isNumeric(builtin) && builtin !== 'float' && builtin !== 'double'
     ? 'decimal'
@@ -867,9 +866,8 @@ const family = (builtin: string): string =>
       : builtin;
 
 /**
- * The facets of both types at once, so that a candidate meets `also` as well: for two lists, for two types of one
- * family such as `int` and `integer`, `token` and `string`. The target's alone for types that cannot be merged;
- * undefined where the two types leave no value.
+ * Intersects facets for lists or types in the same family, such as int/integer or token/string.
+ * Returns the target facets for incompatible families, or undefined when the intersection is empty.
  */
 function steered(f: Facets, also: ValueSpec | undefined): Facets | undefined {
   const g = also?.facets;
@@ -913,8 +911,8 @@ const dated = (f: Facets): boolean =>
   (f.otherBounds?.length ?? 0) > 0 || (f.item !== undefined && dated(f.item)) || (f.members ?? []).some(dated);
 
 /**
- * A valid value as far as the generator goes, within the bounds of a date or time type where it has them, which
- * the generator of valid values leaves to the validator. Bounds of INF and -INF do not limit it.
+ * Generates a candidate, including supported date/time bounds that ordinary generation leaves to validation.
+ * INF and -INF bounds do not restrict finite candidates.
  */
 function valueOf(f: Facets | undefined, rng: Rng): string | undefined {
   if (!f) return undefined;

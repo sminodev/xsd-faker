@@ -12,7 +12,7 @@ import type { Facets } from '../../xsd/facets.js';
 const GROUP_LENGTH = 40;
 /** Free text without an upper bound stays this long at most. */
 const OPEN_LENGTH = 60;
-/** A long upper bound is not used up; text this long reads like a remark. */
+/** Preferred maximum length when the facets allow longer text. */
 const LONG_LENGTH = 160;
 
 const length = (text: string): number => [...text].length;
@@ -81,8 +81,7 @@ export function freeText(text: TextData, facets: Facets, rng: Rng): string | und
     }
     if (joined !== '' && fits(joined)) return joined;
   }
-  // Where no sentence fits, a phrase or a word of the locale does, before words are put together. Anything longer
-  // than a word group is a sentence.
+  // Try an existing phrase or word before assembling text. Add a period above the phrase-length threshold.
   const group = (value: string) => fits(value) && length(value) <= GROUP_LENGTH;
   const phrases = text.phrases.filter(group);
   if (phrases.length > 0) return capitalized(rng.pick(phrases));

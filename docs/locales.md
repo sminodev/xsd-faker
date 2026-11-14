@@ -1,9 +1,8 @@
 # Locales
 
-Without a locale, every value comes from the facets of its type: a last name of `xs:string` with
-`maxLength="30"` becomes something like `Qdnnfugzywaeazi`. A locale gives values that read like real data
-where the names in the schema say what a field holds. The schema still decides: every locale value is
-checked against the facets, and a field the locale cannot fill gets a facet value as before.
+A locale supplies readable names, addresses, dates, contact details and free text for recognized schema
+fields. Each value must satisfy the field's facets. If the locale cannot supply a suitable value, the
+facet generator handles the field. Without a locale, values come directly from the facets.
 
 ```js
 import { generateSampleFile } from 'xsd-faker/node';
@@ -12,16 +11,13 @@ const sample = await generateSampleFile('order.xsd', { locale: 'de', seed: 7 });
 ```
 
 On the command line, use `--locale de`. The built-in locales are `de` and `en`. A tag with a region falls
-back along its subtags, so `de-CH` uses `de`. Without `locale`, values come from the facets alone and a
-locale draws no random numbers, so a seed gives the same document whether locale support is used elsewhere
-or not.
+back along its subtags, so `de-CH` uses `de`.
 
 ## From profiles to locales
 
 Locales replace the profiles of earlier versions. The option `profile` (`generic`, `retail`, `insurance`,
 `logistics`), the CLI option `--profile`, `profileValues` and `PROFILE_NAMES` are gone. A call that still passes
-`profile` fails with a `TypeError` that points to `locale`, and `--profile` ends with exit code 1, so that no
-call loses its values without notice:
+`profile` fails with a `TypeError` directing callers to `locale`; `--profile` exits with code 1:
 
 | Before                                              | Now                                           |
 | --------------------------------------------------- | --------------------------------------------- |
@@ -30,12 +26,12 @@ call loses its values without notice:
 | `profileValues('retail', { locale: 'de' })`         | `localeValues('de')`                          |
 | fixed product names or codes of a profile           | `samples` or `--values`, by path or type name |
 
-A locale fills the fields its names reveal, such as names, addresses, dates and identifiers, in any domain. The
-retail words of a profile, such as product names, have no locale field; list them in `samples`.
+Locales recognize fields by name across domains. Domain-specific values formerly supplied by a profile,
+such as product names, belong in `samples`.
 
 ## Where values come from
 
-For each simple value, the first source that has one meeting the facets wins:
+Values are selected in this order:
 
 1. `fixed` and `default` values of the declaration;
 2. `samples`, by path and then by type name;
@@ -47,11 +43,11 @@ returns the locale as a `ValueSource`, for a chain of your own built with `first
 
 ## Fields
 
-A value's field is read from the local name of its element or attribute, then from the name of its simple
-type and the types that type derives from, nearest first. Names are compared in lower case, with umlauts
+Field recognition checks the local element or attribute name first, then the simple type name and its
+base types, nearest first. Names are compared in lower case, with umlauts
 written out and `_`, `-` and case changes ignored, and a trailing `Type`, `Typ` or a short form such as `Stp`
-of a type name is dropped. German and English names lead to the same field, so a German schema can get English data and the
-other way round.
+is removed from type names. German and English names map to the same fields, so either language can be
+used with either locale.
 
 | Field                   | Names, for example                                                                            |
 | ----------------------- | --------------------------------------------------------------------------------------------- |
@@ -83,13 +79,13 @@ other way round.
 | `id.pzn`                | `PZN`, `Pharmazentralnummer`                                                                  |
 | `text`                  | any other string without pattern or enumeration, unless its name says number, code, key or ID |
 
-A compound name is decided by its last word where that word names an identifier, an e-mail address or a
-phone number, so `Absender_IK` is an IK and `Customer_Email` an e-mail address. A type called just `Name`
-says too little and is not read; only an element or attribute named `Name` counts as a last name. A value
+The last word of a compound name identifies the field if it names an identifier, e-mail address or
+phone number: `Absender_IK` is an IK and `Customer_Email` an e-mail address. The type name `Name` is too
+general for field recognition; only an element or attribute named `Name` counts as a last name. A value
 of type `xs:date`, `xs:dateTime`, `xs:gYear` or `xs:gYearMonth` is always a date.
 
-Where the names mislead, `localeFields` names the field of a path or type, with keys as for `samples`;
-`null` leaves the value to the facets:
+Use `localeFields` to override field recognition by path or type name, with the same keys as `samples`.
+Set a key to `null` to use facet generation for that field:
 
 ```js
 const sample = await generateSampleFile('order.xsd', {
@@ -112,8 +108,7 @@ A record also serves the parent of the element that holds its fields: in
 `Name`. Elements beside each other get records of their own, so `Buyer/Name` and `Seller/Name` are two
 people, and so does each occurrence of a repeated element and each element of a choice branch. A further
 occurrence of a field in the same element, such as the second of three first names, takes another entry of
-the same list while the list has one. A record is drawn when the first of its fields is asked for, with one
-number from the seeded random source, so its fields never shift other values.
+the same list if an unused entry is available.
 
 A record value that fails the facets of its field, such as a last name longer than `maxLength`, is replaced
 for that field only: by another entry of the locale's list that fits, and otherwise by a facet value. The
@@ -123,14 +118,15 @@ gender with an enumeration takes the code it spells for that gender, such as `w`
 
 ## Dates
 
-Dates count from `referenceDate`: a birth date lies one to ninety years back, a date whose element name says
-it ends something up to two years ahead, any other date up to two years back. A name ends something with a
-word such as `Ende`, `Ablauf`, `bis`, `end`, `until` or `expiry`, also without `datum` or `date` in it:
-`GueltigBis`, `Leistungsende` and `validUntil` lie ahead, whether their type is `xs:date` or a string type
-named like a date. The built-in date types and a string without pattern get the ISO form, such as
-`2026-01-15`. A string with a pattern gets the first of these forms the pattern accepts: `YYYYMMDD`,
-`YYYY-MM-DD`, `DD.MM.YYYY`, `YYYYMMDDhhmmss`, `YYYY-MM-DDThh:mm:ss`, `YYYYMMDDhhmm`, `YYYY-MM-DD hh:mm:ss`,
-`YYYYMM` and `YYYY`.
+Dates are relative to `referenceDate`. Birth dates are one to ninety years earlier. End, expiry and due
+dates are up to two years later; other dates are up to two years earlier. Words such as `Ende`, `Ablauf`,
+`bis`, `end`, `until` or `expiry` identify future dates even without `datum` or `date` in the name:
+`GueltigBis`, `Leistungsende` and `validUntil` produce future dates for both built-in date types and
+string types recognized as dates.
+
+Built-in date types and strings without a pattern use ISO forms, such as `2026-01-15`. For a string with
+a pattern, the first matching format is used: `YYYYMMDD`, `YYYY-MM-DD`, `DD.MM.YYYY`, `YYYYMMDDhhmmss`,
+`YYYY-MM-DDThh:mm:ss`, `YYYYMMDDhhmm`, `YYYY-MM-DD hh:mm:ss`, `YYYYMM` or `YYYY`.
 
 ## Identifiers
 
@@ -143,25 +139,21 @@ Four identifiers of the German health system get a valid check digit, in every l
 | `id.lanr` | six digits, a check digit and a specialty code | digits 1 to 6 weighted 4, 9, 4, 9, …; 10 minus the sum modulo 10, 0 for 10                      |
 | `id.pzn`  | eight digits, such as `27580899`               | digits weighted 1 to 7, modulo 11; a remainder of 10 is never issued                            |
 
-A generated identifier should not be the number of a real person or institution. Two of them have a range
-that is never issued, and their values come from there:
+KVNR and IK values preferentially use ranges that are not issued to real people or institutions:
 
-- A KVNR has one digit four times in a row or `666` among its digits 2 to 9, such as `J222256102`. The rule
-  by which KVNRs are allocated excludes such numbers. The prefix `X0000` is left out, because test cards of
-  the electronic health card use it.
-- An IK starts with 97, 98 or 99, the classification reserved for internal use, which is never issued, such
-  as `979865620`. Where the schema's pattern demands another start, such as `10` for a health insurance
-  fund, the IK is `109500969` if the pattern allows it. That IK exists for tests of the statutory health
-  insurance and belongs to no real payer.
+- KVNRs contain four consecutive identical digits or `666` among digits 2 to 9, such as `J222256102`.
+  The allocation rules exclude these numbers. The prefix `X0000` is excluded from generation because
+  electronic health card test cards use it.
+- IKs start with 97, 98 or 99, which are reserved for internal use, such as `979865620`. If the schema
+  requires another prefix, `109500969` is tried when it satisfies the facets. This IK is used for
+  statutory health insurance tests and does not identify a real payer.
 
-LANR and PZN have no such range. Their values have a valid check digit in the issued range and may be the
-number of a real physician or product. So may a KVNR or IK where twenty drafts from the test range do not
-fit the facets: a pattern that allows no run of four equal digits and no `666`, or an IK pattern that allows
-neither 97 to 99 nor `109500969`. A KVNR draft from the test range takes the letter and the other digits from
-the schema's pattern and repeats one of those digits, so a pattern such as `[A-Z][1-5]{8}[0-9]` keeps to the
-test range too. The digits of the issued range come from the schema's pattern when it gives the identifier's
-form, so a fixed part of the pattern stays; otherwise they are random. An enumeration on the type comes
-first.
+LANR and PZN values have valid check digits but no reserved test range; they may match real physician
+or product numbers. KVNR and IK generation also falls back to the issued range if twenty attempts from
+the test range fail to satisfy the facets. Use explicit values if avoiding real identifiers is a requirement.
+
+Identifier generation preserves restrictions such as fixed prefixes and specialty codes when the schema's
+pattern produces the identifier's format. Enumerations take precedence over generated identifiers.
 
 Where a document must hold agreed test numbers, list them in `samples` by path or type name, as for
 [domain values](#domain-values); listed values come before the locale.
@@ -173,13 +165,13 @@ unless its name says it holds a number, a code, a key or an ID, such as `Kundenn
 `Tarifschluessel` or `orderId`; those keep facet values. Up to 40 characters it is a word group without a
 period, such as `Hinterhaus links`; beyond, it is sentences. A phrase or sentence of the locale is used as
 it is where it fits the length facets; otherwise words are joined to the exact length, with single spaces
-and none at either end, so the length holds under every `whiteSpace` rule. A long `maxLength` is not used
-up: free text stays under 160 characters unless `minLength` asks for more.
+and none at either end, so the length holds under every `whiteSpace` rule. Free text is capped at
+160 characters unless `minLength` requires more, even if `maxLength` allows it.
 
 ## Domain values
 
-A locale knows people, addresses, dates and contact details, not the codes of a domain. Supply those as
-value lists keyed by the name of their simple type, so that one entry covers every place the type is used:
+Supply domain-specific codes as value lists keyed by simple type name. One entry then covers every
+field using that type:
 
 ```js
 const sample = await generateSampleFile('claim.xsd', {
@@ -196,15 +188,15 @@ starting with `/` a path. A type key also applies to restrictions of that type, 
 
 ## Adding a locale
 
-Everything for locales comes from `xsd-faker`: `defineLocale`, `extendLocale`, `localeFromFaker`, the
+Import locale helpers and types from `xsd-faker`: `defineLocale`, `extendLocale`, `localeFromFaker`, the
 built-in locales `de` and `en`, `LOCALES` by tag and the types. The data lives in the package
 `xsd-faker-locales`, which is installed with xsd-faker; import from it directly only in a tool that uses the
 data without xsd-faker.
 
 A locale is plain data in the shape of `LocaleData`: `person`, `address`, `contact` and `text`.
 `defineLocale(tag, data)` checks the data and
-returns a frozen locale; with `extends`, the data only needs the parts that differ. Objects fall back field
-by field, arrays are replaced as a whole, so a list never mixes two languages:
+returns a frozen locale. With `extends`, supply only the fields you want to override. Objects are merged
+field by field; arrays are replaced as a whole:
 
 ```js
 import { defineLocale, de } from 'xsd-faker';
@@ -228,10 +220,10 @@ const deCH = defineLocale('de-CH', {
 const sample = await generateSampleFile('order.xsd', { locale: deCH });
 ```
 
-A mistake is a `TypeError` that names its path, such as `locale de-CH: address.places[0].postcodes must not
-be empty`, so a locale fails when it is defined and not halfway through generation. `extendLocale(base,
-patch)` returns a copy of a locale with some data replaced; with `{ arrays: 'append' }` its arrays are added
-to the existing ones instead:
+Invalid locale data throws a `TypeError` identifying the field, such as
+`locale de-CH: address.places[0].postcodes must not be empty`. Validation happens when the locale is defined.
+`extendLocale(base, patch)` returns a copy with the supplied overrides. Use `{ arrays: 'append' }` to
+append array entries instead of replacing them:
 
 ```js
 import { extendLocale, en } from 'xsd-faker';
@@ -273,19 +265,19 @@ length the words cannot make is left to the facets.
 
 ## A locale from faker-js
 
-`localeFromFaker(definition)` builds a locale from the locale data of [faker-js](https://fakerjs.dev), which
-you install and import yourself; neither package depends on it. The object is read for its shape: first
-names by gender, last names, titles among the name prefixes, street names and building number patterns, and
-where faker-js has cities, the cities with its states and the country of its metadata, named by its default
-country. Without cities, city, postcode, state and country come together from the base locale, so an address
-never mixes two countries. Where the metadata names no country, pass it, as in `localeFromFaker(fr, {
-country: 'FR' })`; otherwise the country of the cities stays open and a country field gets a facet value,
-never the country of the base locale. For a definition without cities, `country` is a `TypeError`: its addresses
-come from the base locale, country included. Entries a locale cannot hold, such as ones with control characters,
-are left out; `?` in a postcode pattern stands for a letter. faker-js has no postcodes per city, so each
-city gets the locale's postcode pattern, and the address of a generated document does not combine a real
-city with its real postcode. Everything else comes from the base locale, `de` for a German tag and `en`
-otherwise:
+`localeFromFaker(definition)` converts locale data from [faker-js](https://fakerjs.dev), which you install
+and import separately. Neither xsd-faker nor its locale package depends on faker-js. The adapter reads
+first names by gender, last names, titles, street names and building number patterns.
+
+If the definition contains cities, they are used with its states and country metadata. If the country
+is missing, supply it explicitly, for example `localeFromFaker(fr, { country: 'FR' })`. Otherwise country
+fields use facet generation. Each city uses the locale's postcode pattern because faker-js does not
+provide postcodes per city; the result is not guaranteed to be a real city/postcode pair.
+
+Without cities, the full address data comes from the base locale, including the country. Passing
+`country` in this case throws a `TypeError`. Other missing data also comes from the base locale:
+`de` for a German tag and `en` otherwise. Invalid entries, such as strings containing control characters,
+are omitted. In postcode patterns, `?` represents a capital letter.
 
 ```js
 import { de as fakerDe } from '@faker-js/faker';

@@ -1,4 +1,4 @@
-// The DOCTYPE cases of the profile, then further cases.
+// Allowed inert DOCTYPE forms and rejected declarations.
 import { describe, expect, it } from 'vitest';
 import { GenerateError, generateSample } from '../index.js';
 import { scanDoctype } from './doctype.js';

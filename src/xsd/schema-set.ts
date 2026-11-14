@@ -28,15 +28,15 @@ export interface Component {
   doc: SchemaDocument;
 }
 
-/** A schema text a reader decoded itself, with the byte count of its file for the size limits. */
+/** Decoded schema text with the original file size for input-limit checks. */
 export interface SchemaText {
   text: string;
   bytes: number;
 }
 
 /**
- * The schema texts by path, or a function that reads them. A text is already decoded: an encoding in its XML
- * declaration is not read. A function may return the file's byte count with the text.
+ * Schema texts keyed by path, or a synchronous reader. Text is already decoded; its XML encoding declaration
+ * does not affect decoding. A reader may also return the original byte count.
  */
 export type SchemaSource = Readonly<Record<string, string>> | ((path: string) => string | SchemaText | undefined);
 
@@ -241,7 +241,7 @@ export class SchemaSet {
     attributeGroup: new Map(),
   };
   private readonly read: (path: string) => string | SchemaText | undefined;
-  /** Locations to hand libxml2 in plain form, by document, until the document is loaded. */
+  /** Pending schemaLocation normalizations, grouped by document. */
   private readonly plainForms = new Map<string, { node: Element; location: string; relative: string }[]>();
 
   constructor(
@@ -441,11 +441,9 @@ export class SchemaSet {
     return this.lookup(kind, name);
   }
 
-  /** The text of a schema file, read and checked once; undefined after a reported problem. */
   /**
-   * Hands libxml2 a location in its plain form. It reads `sub/../leaf.xsd` only where a directory `sub` exists, and
-   * none does when no file of it is part of the schema set; so the text it validates names the same file as
-   * `leaf.xsd`, relative to the document, the way the loader resolved it.
+   * Normalizes relative schema locations for libxml2. Its virtual filesystem may lack directories traversed
+   * by `sub/../leaf.xsd`, even though the resolved file exists. Use the equivalent relative path instead.
    */
   private plain(path: string, node: Element, location: string): void {
     if (isAbsoluteUri(location) || isAbsoluteUri(path) || location.startsWith('/')) return;
@@ -462,10 +460,9 @@ export class SchemaSet {
   }
 
   /**
-   * Writes the plain locations into the text libxml2 validates. The start tags of the text are matched to the
-   * elements of the parsed document in document order, so the attribute of exactly that xs:import, xs:include or
-   * xs:redefine changes, whatever its prefix and however its value is written; the new value is escaped and no line
-   * moves. A location that cannot be written so is reported instead of failing later in libxml2.
+   * Rewrites only the schemaLocation attributes selected by the DOM. Matching start tags in document order
+   * avoids touching comments, CDATA or foreign elements. Replacement values are escaped and line numbers
+   * are preserved; unsupported locations produce a diagnostic.
    */
   private writePlainForms(path: string, root: Element): void {
     const pending = this.plainForms.get(path);
@@ -514,6 +511,7 @@ export class SchemaSet {
     this.sourceTexts.set(path, out);
   }
 
+  /** Reads and checks a schema file once; returns undefined after reporting a problem. */
   private text(path: string, at: At): string | undefined {
     const known = this.sourceTexts.get(path);
     if (known !== undefined) {

@@ -12,8 +12,7 @@
 // - PZN, the pharmaceutical number: seven digits weighted 1 to 7, the sum modulo 11 is the check digit; a sum
 //   leaving 10 is never issued. (IFA, Technische Hinweise zur PZN-Codierung.)
 //
-// A generated identifier should never be the number of a real person or institution. Two of them have a range that
-// is never issued, and values come from there first:
+// KVNR and IK generation prefers ranges that are not issued to real people or institutions:
 //
 // - KVNR: the numbers the allocation rule excludes, with a digit four times in a row or 666 among digits 2 to 9.
 //   Test cards of the electronic health card use such numbers as X0000nnnnP, so that prefix is left out.
@@ -137,7 +136,7 @@ const TEST_RANGES: Partial<Record<IdentifierKind, TestRange>> = {
   },
 };
 
-/** How often a draft is tried before the identifier gives up for this draw. */
+/** Maximum candidate attempts per range. */
 const DRAFTS = 20;
 
 /**
@@ -154,9 +153,8 @@ export function identifier(
 ): string | undefined {
   const { shape, draft, complete } = IDENTIFIERS[kind];
   const sub = createRng(rng.int(0, 0x7fffffff));
-  // The schema's draft draws from the caller's random source. The first one is made here, whichever range the value
-  // comes from, so that the other values of the document stay where they are while a test value fits; only a draft
-  // from the issued range draws further ones, as it did before test ranges existed.
+  // Draw the initial candidate before choosing a range to keep RNG consumption stable when a test value fits.
+  // Only retries in the issued range consume additional draws.
   const first = fromFacets();
   const test = TEST_RANGES[kind];
   if (test) {

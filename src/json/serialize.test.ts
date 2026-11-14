@@ -1,5 +1,5 @@
-// The compact JSON forms of the JSON contract: each tree is the instance of a contract case, with the metadata the
-// walker records, and must give exactly the JSON of that case. Then the forms of single values.
+// Compact JSON contract cases. Trees include the metadata supplied by the walker; expected results cover
+// document structure and individual values.
 import { describe, expect, it } from 'vitest';
 import { element, type InstanceAttribute, type InstanceElement, text } from '../xml/tree.js';
 import { JsonMappingError, toJson } from './serialize.js';

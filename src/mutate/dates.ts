@@ -5,7 +5,7 @@
 
 import type { Rng } from '../rng.js';
 
-/** The types whose values have a moment here. */
+/** Date/time types supported by the comparison functions. */
 export const ORDERED_DATES: ReadonlySet<string> = new Set(['date', 'dateTime', 'time', 'gYear', 'gYearMonth']);
 
 /** A value on the time line: the instant in milliseconds, or the local reading as if it were UTC. */
@@ -24,10 +24,10 @@ const FORMS: Readonly<Record<string, RegExp>> = {
   gYearMonth: new RegExp(`^${YEAR}-(\\d{2})${ZONE}$`),
 };
 const FOURTEEN_HOURS = 14 * 3600 * 1000;
-/** The day `time` values are read on. */
+/** Reference date for comparing time-only values. */
 const REFERENCE = { year: 1972, month: 12, day: 31 };
 
-/** The moment of a value of an ordered type, or undefined for a value it cannot read. */
+/** Parses a supported date/time value; returns undefined for unsupported or invalid input. */
 export function momentOf(builtin: string, lexical: string): Moment | undefined {
   const form = FORMS[builtin];
   const m = form?.exec(lexical.trim());
@@ -125,7 +125,7 @@ export function formatMoment(builtin: string, moment: Moment): string | undefine
 }
 
 const DAY = 24 * 3600 * 1000;
-/** The step between two values of a type, about: a year, a month, a day or a second. */
+/** Approximate step size for the type: a year, month, day or second. */
 const STEP: Readonly<Record<string, number>> = {
   gYear: 366 * DAY,
   gYearMonth: 31 * DAY,

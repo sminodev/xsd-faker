@@ -20,8 +20,8 @@ export function listKeys(context: Pick<ValueContext, 'path' | 'kind' | 'typeName
 }
 
 /**
- * Values sampled with the run's seeded RNG from the first key that has one meeting the facets. A list whose values
- * all fail the facets passes the question on to the next key.
+ * Samples from the first matching key with at least one value satisfying the facets, using the seeded RNG.
+ * If every value fails, lookup continues with the next key.
  */
 export function valueLists(lists: ValueLists): ValueSource {
   return {

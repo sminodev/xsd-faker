@@ -27,8 +27,8 @@ export class JsonMappingError extends Error {
 }
 const NCNAME = new RegExp(`^(?!.*:)[${NAME_START_CHAR}][${NAME_CHAR}]*$`, 'u');
 /**
- * A text property is an NCName other than `__proto__`, or exactly `#text`; so it never meets a key of the form
- * `{ns}local`, `@local`, `#type` or a group key.
+ * Accepts an NCName other than `__proto__`, or `#text`. This excludes qualified element/attribute keys
+ * and reserved metadata keys; a group named `text` can still collide with `#text`.
  */
 export function checkTextProperty(name: unknown): void {
   if (typeof name !== 'string' || (name !== '#text' && (!NCNAME.test(name) || name === '__proto__'))) {
@@ -209,7 +209,7 @@ export function toJson(
   ): { result: JsonObject; put: Put; reserve: (name: string, identity: string) => void } => {
     const result = Object.create(null) as JsonObject;
     const names = new Map<string, string>();
-    /** Keeps a key free that this object could hold, so that nothing else takes it. */
+    /** Reserves a possible property name to detect collisions before writing data. */
     const reserve = (name: string, identity: string) => {
       names.set(name, identity);
     };
@@ -308,7 +308,7 @@ export function toJson(
       const first = list[0] ?? node;
       put(elementKey(first), `element {${first.ns}}${local}`, list.length > 1 ? list.map(generic) : generic(first));
     }
-    // Without children, the text is the text property where it is not empty; attributes alone stay alone.
+    // Without children, include a text property only for non-empty text.
     if (children.length === 0 && content !== '') {
       put(textProperty, 'text', content);
     }
@@ -330,7 +330,7 @@ export function toJson(
     if (node.nil && attributes.length === 0 && !type) {
       return null;
     }
-    // An element of xs:anyType without xsi:type is mapped like wildcard content; empty, it is "".
+    // Map xs:anyType without xsi:type as wildcard content; an empty element becomes "".
     if (node.anyType && !type && !node.nil) {
       return generic(node);
     }

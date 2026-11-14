@@ -9,7 +9,7 @@ import { splitXmlSpace } from '../xml/space.js';
 
 type Method = 'extension' | 'restriction' | 'substitution';
 
-/** What a declaration says about its type; a substitution group member without a type takes its head's. */
+/** Declared type; substitution group members without an explicit type inherit the head's type. */
 export type DeclaredType =
   { kind: 'named'; qname: QName; from: Element } | { kind: 'anonymous'; node: Element } | { kind: 'none' };
 
@@ -73,7 +73,7 @@ function typeOf(set: SchemaSet, decl: Element): TypeRef | undefined {
   return declared.kind === 'anonymous' ? declared.node : 'anyType';
 }
 
-/** One derivation step: the type it starts from, the method, and the base it reaches. */
+/** One derivation step: derived type, method and base type. */
 interface Step {
   type: TypeRef;
   method: 'extension' | 'restriction';
@@ -204,7 +204,7 @@ export function expandedName(component: Component): string {
   return clark(component.doc.targetNamespace, attr(component.node, 'name') ?? '');
 }
 
-/** How often a particle occurs at least. */
+/** Minimum occurrence count. */
 const minimum = (node: Element): number => Number(attr(node, 'minOccurs') ?? '1');
 const maximum = (node: Element): number => {
   const max = attr(node, 'maxOccurs');
@@ -212,8 +212,8 @@ const maximum = (node: Element): number => {
 };
 
 /**
- * Whether no instance of a declaration can be written: its declared complex type is abstract and no type derived from
- * it is allowed. Such an element without xsi:type is invalid.
+ * Whether an element has an abstract declared type with no allowed concrete alternative.
+ * Such an element cannot have a valid instance.
  */
 export function declarationUnavailable(set: SchemaSet, decl: Element): boolean {
   const declared = declaredType(set, decl);

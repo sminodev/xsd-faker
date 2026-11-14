@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 
 const root = join(import.meta.dirname, '..');
 const read = (file: string) => readFileSync(join(root, file), 'utf8');
-/** The guides a reader of xsd-faker follows; the README of the locale package is written for tools without it. */
+/** xsd-faker guides; the locale package README also covers standalone use. */
 const GUIDES = [
   'README.md',
   'CONTRIBUTING.md',

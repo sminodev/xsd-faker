@@ -2112,7 +2112,7 @@ test('a locale fills ? in a postcode pattern with a letter and dates that end so
     assert.match(sample.json.Lieferdatum, /^\d{4}-\d\d-\d\d$/);
   }
 });
-/** The probe below as the library wrote it before it had locales. */
+/** Expected output for the default facet generator, without a locale. */
 const EXPECTED_WITHOUT_LOCALE =
   '<?xml version="1.0" encoding="UTF-8"?>\n<Kunde id="T">\n  <Vorname>Ofcsmu</Vorname>\n  <Nachname>Rnvoawi</Nachname>\n  <Geburtsdatum>2028-10-14</Geburtsdatum>\n  <Bemerkung>Aamwpruppbjnvkmm</Bemerkung>\n</Kunde>\n';
 test('without a locale a fixed probe gives the same document as without locale support', async () => {

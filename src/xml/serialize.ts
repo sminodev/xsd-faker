@@ -134,8 +134,7 @@ function writer(plan: NamespacePlan, indent: string) {
       ...(node.nil ? [`${qname(XSI, 'nil', true)}="true"`] : []),
     ];
     const open = attributes.length > 0 ? `<${name} ${attributes.join(' ')}` : `<${name}`;
-    // An element without content closes itself, also when its content is an empty text, so that XML and the
-    // fragments of mixed content in JSON spell it alike.
+    // Use self-closing tags for empty elements, including empty text, to match mixed-content JSON fragments.
     if (node.children.every((c) => c.kind === 'text' && c.value === '')) {
       return `${open}/>`;
     }

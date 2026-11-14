@@ -1,7 +1,7 @@
 // The shape of a locale. Every list is plain data, so a locale can be written as an object literal or loaded from
 // JSON. Patterns use `#` for a digit; street patterns refer to the street lists with `{stem}`, `{suffix}` and `{name}`.
 
-/** One list for each grammatical gender, as names, salutations and name suffixes need. */
+/** Lists of names, salutations or name suffixes grouped by gender. */
 export interface Gendered {
   female: readonly string[];
   male: readonly string[];
@@ -17,8 +17,8 @@ export interface PersonData {
   /** Words before the last name such as `von`; may be empty. */
   nobilityPrefix: readonly string[];
   /**
-   * Words that belong to a name without being part of it, such as `Freiherr` and `Freifrau` or `Jr.`; each list may
-   * be empty. A neutral form suits every person.
+   * Name additions such as `Freiherr`, `Freifrau` or `Jr.`; each list may be empty.
+   * Neutral forms can be used for any gender.
    */
   nameSuffix: Gendered;
   salutation: Gendered;
@@ -59,7 +59,7 @@ export interface AddressData {
   places: readonly Place[];
   /** The states or regions that `Place.state` refers to; may be empty. */
   states: readonly Region[];
-  /** The country of the places; may be missing where it is not known, and a country field gets a facet value then. */
+  /** Country for the listed places. If absent, country fields use facet generation. */
   country?: Region;
 }
 
@@ -100,6 +100,6 @@ export type DeepPartial<T> = T extends readonly unknown[]
 
 /** The data `defineLocale` takes: a complete locale, or parts of one on top of the locale it `extends`. */
 export type LocaleInput = DeepPartial<Omit<LocaleData, 'tag'>> & {
-  /** The locale this one falls back to for everything it does not give. */
+  /** Base locale supplying omitted fields. */
   extends?: LocaleData;
 };

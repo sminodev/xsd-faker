@@ -10,10 +10,10 @@ The root namespace is the default namespace when doing so does not qualify local
 Qualified attributes get prefixes; the XML namespace uses its reserved `xml` prefix. A prefix in an `xs:QName`
 value keeps its spelling and is declared on the element that holds the value, unless the root already binds it.
 Nothing inside mixed content is indented, so the markup matches the string in the JSON form. An element
-without content, also one whose content is an empty text, closes itself (`<br/>`) in both.
+without content, including empty text, uses a self-closing tag (`<br/>`) in both.
 `xsi:nil` and `xsi:type` use the `xsi` prefix. The namespace of an `xsi:type` value always gets a prefix,
-also where it is the default namespace of element names; a type without namespace keeps the default
-namespace off, as an unqualified element does.
+even when element names use it as the default namespace. A type without a namespace prevents use of a
+default namespace, as an unqualified element does.
 
 `schemaLocation` writes `xsi:schemaLocation` for a namespaced root or
 `xsi:noNamespaceSchemaLocation` for a root without a namespace. It is only a schema hint. The validator
@@ -40,8 +40,8 @@ Compact mode describes the content of the root; there is no extra root-name wrap
   groups.
 - A repeating model group becomes one property holding an array with an object per occurrence; see
   [Repeated groups](#repeated-groups).
-- A complex type with simple content is an object with any attributes and a `value` property, also when
-  this sample has no attributes. An element of a simple type is a plain value.
+- A complex type with simple content is an object with any attributes and a `value` property, even when
+  the sample has no attributes. An element of a simple type is a plain value.
 - Mixed content uses `value` containing an XML fragment string, also where its content model has repeated
   groups (no `#…` arrays there), and `""` when it is empty. Simple content always has `value` too, `""` when
   empty. The child markup keeps the prefixes of the XML, and each child element declares the namespaces its
@@ -54,11 +54,12 @@ Compact mode describes the content of the root; there is no extra root-name wrap
   otherwise they use strings. A union with a list member is a string.
 - `xs:float` and `xs:double` values `INF`, `-INF` and `NaN` are the strings `"INF"`, `"-INF"` and `"NaN"`, also
   in attributes, lists, unions and simple content; finite values stay numbers. The generator writes these
-  values where the schema gives them, as a fixed value or an enumeration, not at random.
+  values for fixed values, enumerations or bounds that require infinity, not at random. A numeric literal
+  that overflows its type also becomes `"INF"` or `"-INF"`, such as `1e39` for `xs:float`.
 - An element written with `xsi:nil="true"` is `null`, or with attributes an object with the attributes
   and `value: null`; see [Nil](#nil).
 - Content admitted by `xs:any` is mapped without the schema; see [Wildcard content](#wildcard-content). So is an
-  element of type `xs:anyType`, declared or for want of a type, unless `xsi:type` names a complex type; the
+  element of type `xs:anyType`, declared explicitly or used as the default type, unless `xsi:type` names a complex type; the
   generator writes it empty, `""`, or with its fixed value.
 - A member of a substitution group uses its own local name; see
   [Substitution groups and xsi:type](#substitution-groups-and-xsitype).
@@ -136,8 +137,8 @@ A type without namespace is written `{}local`. An element of its declared type h
 content with `xsi:type` is an object with `#type`, the attributes and the typed value under the text
 property: `{ "#type": "{urn:example}EuroAmount", "currency": "EUR", "value": 4.99 }`. A nil element with
 `xsi:type` keeps `#type` next to `value: null`. A repeated group named `type`, whose key is also `#type`,
-makes the object a collision, which is refused wherever the element's type has alternatives `xsi:type` could
-name, in a sample without `xsi:type` too.
+causes a collision whenever the element's type has `xsi:type` alternatives, even if the sample does not
+use `xsi:type`.
 
 An element of a simple type has no JSON form for any other type: `xsi:type` naming the declared type
 itself changes nothing, and any other type is refused like a collision, leaving the XML intact. The
@@ -146,8 +147,8 @@ meet this limit.
 
 ### Wildcard content
 
-Elements admitted by `xs:any` are mapped without the schema, whatever `processContents` says and also when
-a global declaration of the schema matches them:
+Elements admitted by `xs:any` are mapped without the schema, regardless of `processContents` or matching
+global declarations:
 
 - An element without attributes and children is its text, unchanged: `<f:x> more </f:x>` becomes
   `" more "`, an empty element `""`. A value the schema types as a number stays a string.
@@ -191,15 +192,17 @@ A collision the content model does not show, such as wildcard content of two nam
 intact, sets `jsonStatus` to `unavailable`, and adds a `json-mapping` diagnostic. Tree mode is the
 alternative.
 
-Numbers are checked before conversion. An unsafe integer, a non-finite value or a decimal whose serialized
-JavaScript number would change the decimal value is refused. `xs:double` and `xs:float` are no decimals: the
-value of an `xs:double` is the double nearest to its text, so every finite double has its JSON number, also
-`2.7457332729808998E126`. An `xs:float` value is the nearest 32-bit float; its JSON number is the double read
-from the text, and it is refused only where that double rounds to another float or beyond the float range. A
-union value follows the member that reads it. The value generator stays in the exact range
-when the bounds allow it, so this concerns fixed values, custom values and bounds beyond that range.
-`numbers: 'string'` keeps all numeric lexical values as JSON strings. It changes the JSON contract and will
-not satisfy a schema expecting numbers.
+Numbers are checked before conversion. Unsafe integers and decimals whose JavaScript representation would
+change their value are refused. `xs:double` and `xs:float` use binary floating-point values instead:
+every finite double has a JSON number, including `2.7457332729808998E126`. For `xs:float`, the number parsed
+from the text is accepted only if it rounds to the same 32-bit float as the original value. A literal
+that overflows its type becomes the string `"INF"` or `"-INF"`; it is not emitted as a non-finite JSON number.
+A union follows its first accepting member.
+
+The value generator stays within the exact numeric range when the bounds allow it. Conversion refusals
+therefore mainly affect fixed values, custom values and bounds outside that range. Use `numbers: 'string'`
+to keep all numeric lexical values as JSON strings. This changes the JSON contract and will not satisfy
+a schema expecting numbers.
 
 Compact JSON cannot preserve the ordering of interleaved child elements or every XML lexical detail.
 It is not a general, reversible XML-to-JSON mapping. Use tree mode for those consumers.
@@ -219,8 +222,7 @@ It is not a general, reversible XML-to-JSON mapping. Use tree mode for those con
   type; `typeable` where the type has alternatives `xsi:type` could name.
 
 This is the package's own instance-tree format. It preserves the generated instance information, not an
-original XML document's prefixes, comments,
-attribute ordering or source formatting.
+original XML document's prefixes, comments, attribute ordering or source formatting.
 
 ## CLI files
 

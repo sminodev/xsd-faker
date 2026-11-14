@@ -1,6 +1,5 @@
-// Defining and extending locales. A locale given in parts falls back to the locale it extends: objects are merged
-// field by field, arrays are replaced as a whole, so one list never mixes two languages unless asked to. Every locale
-// is checked when it is defined, so that a mistake shows up with its path and not during generation.
+// Defines and extends locales. Objects merge field by field; arrays are replaced as a whole unless appending
+// is requested. Validation happens at definition time and reports the path of the first invalid field.
 
 import type { DeepPartial, LocaleData, LocaleInput } from './types.js';
 
@@ -43,8 +42,8 @@ const isObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
 /**
- * Defines a locale: complete data, or parts of a locale on top of the one it `extends`. Throws a `TypeError` naming
- * the path of the first field that is missing or malformed. The result is frozen.
+ * Defines a locale from complete data or overrides of the locale it `extends`. Throws a `TypeError`
+ * identifying the first missing or malformed field. The result is frozen.
  */
 export function defineLocale(tag: string, input: LocaleInput): LocaleData {
   if (typeof tag !== 'string' || !TAG.test(tag)) throw new TypeError(`${String(tag)} is not a language tag`);
@@ -56,8 +55,8 @@ export function defineLocale(tag: string, input: LocaleInput): LocaleData {
 }
 
 /**
- * A locale with some of its data replaced: objects are merged, arrays replaced, or with `arrays: 'append'` added to
- * the end of the existing ones. The result keeps the tag of `base` unless `tag` names another one.
+ * Creates a locale with the supplied overrides. Objects are merged; arrays are replaced unless
+ * `arrays: 'append'` is set. Keeps the base tag unless `tag` is supplied.
  */
 export function extendLocale(
   base: LocaleData,

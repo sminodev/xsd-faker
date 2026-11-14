@@ -1,7 +1,6 @@
-// What a value means, read from the names of the schema: the local name of the element or attribute first, then the
-// names of its type and the types that type derives from. The names are compared in lower case, with umlauts written
-// out and separators removed, so `Postleitzahl`, `postleitzahl` and `POST_LEITZAHL` are one name. German and
-// English names lead to the same field; the locale only decides what the values look like.
+// Recognizes fields from element or attribute names, then type names and base types. Matching ignores case and
+// separators and transliterates umlauts: Postleitzahl, postleitzahl and POST_LEITZAHL match the same field.
+// German and English aliases are independent of the locale used to generate values.
 
 import type { ValueContext } from '../source.js';
 
@@ -66,11 +65,11 @@ const NAMES: ReadonlyMap<string, FieldKey> = names({
   'id.pzn': 'pzn pharmazentralnummer',
 });
 
-/** Words that end a type name without saying anything about it, such as the `Type` of `Date_Type` or `Stp`. */
+/** Ignored type-name suffixes, such as `Type` in `Date_Type` or `Stp`. */
 const TYPE_SUFFIXES = new Set(['stp', 'ctp', 'type', 'typ', 't']);
-/** Names that only an element or attribute may use; as a type name they say too little. */
+/** Names too general for type-based recognition; matched only on elements and attributes. */
 const ELEMENT_ONLY = new Set(['name']);
-/** Last words of a compound name that decide on their own, as in `Absender_IK` or `Customer_Email`. */
+/** Suffixes sufficient to identify a compound name, as in `Absender_IK` or `Customer_Email`. */
 const LAST_WORD = new Set(['ik', 'kvnr', 'lanr', 'pzn', 'email', 'mail', 'mailadresse', 'telefon', 'telefonnummer']);
 
 /** A word that makes a name a date: German compounds end with `datum`, English names have a word of their own. */
@@ -130,8 +129,8 @@ function fieldOfName(name: string, type: boolean): FieldKey | undefined {
 }
 
 /**
- * The field a value is for: by the name of its element or attribute, by its type's names, and for dates and free
- * text by its built-in type. Undefined where the names say nothing and the value is no free text.
+ * Recognizes a field by element/attribute name, then type names, with built-in-type fallbacks for dates
+ * and free text. Returns undefined when no field matches.
  */
 export function fieldOf(
   context: Pick<ValueContext, 'name' | 'facets' | 'typeName' | 'baseTypeNames'>,

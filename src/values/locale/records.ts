@@ -32,8 +32,8 @@ export interface AddressRecord {
 }
 
 /**
- * The first names for a gender: its own and the neutral ones, and for a neutral person the neutral names, or both
- * others where there are none.
+ * First names for the selected gender, including neutral names. For a neutral person, uses neutral names
+ * when available, otherwise both gendered lists.
  */
 export function forGender(lists: Gendered, gender: Gender): string[] {
   if (gender !== 'neutral') return [...lists[gender], ...lists.neutral];
@@ -114,9 +114,8 @@ export function drawAddress(locale: LocaleData, rng: Rng): AddressRecord {
 }
 
 /**
- * The record of a kind for the value: the innermost element's own, one a child element drew for it, or the parent's
- * own; otherwise a new one, drawn here and offered to the parent. A value outside any element of complex type gets a
- * record of its own.
+ * Finds a record in the innermost element, a child's shared record or the parent. Otherwise creates one
+ * and shares it with the parent. Values outside complex-type elements receive their own record.
  */
 export function record<T>(context: ValueContext, kind: string, draw: (rng: Rng) => T): T {
   const scope = context.scopes?.at(-1);

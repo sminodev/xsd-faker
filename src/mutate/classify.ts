@@ -1,8 +1,6 @@
-// Reads the messages of libxml2 and decides whether a rejected document was rejected for the rule its mutation
-// aims at. A message alone is not enough: "This element is not expected" follows a missing element, a surplus one,
-// a wrong order, an unknown element and a second branch of a choice alike. So each message is judged against the
-// change: which element it names, on which line, with which value, and which elements stand around the change. Every
-// message of a document has to fit, and one of them has to state the rule itself.
+// Classifies validation diagnostics against the intended mutation. Structural messages such as "This element
+// is not expected" can indicate several different rules, so classification also checks the element, line, value
+// and surrounding nodes. Every diagnostic must match the mutation, and at least one must identify the rule.
 
 import type { Verdict } from '../validate/xmllint.js';
 import { splitXmlSpace } from '../xml/space.js';
@@ -68,7 +66,7 @@ const names = (list: string): string[] =>
     .filter(Boolean)
     .map(expanded);
 
-/** What one libxml2 message says. Unknown messages, and anything but a string, give an empty result. */
+/** Parses one libxml2 diagnostic. Unknown messages and non-string inputs return an empty result. */
 export function parseDiagnostic(message: string): Diagnostic {
   if (typeof message !== 'string') return {};
   const text = message.replace(/^Schemas validity (?:error|warning) : /, '');
@@ -219,9 +217,8 @@ function fits(d: Diagnostic & { line?: number }, applied: AppliedMutation): Fit 
 }
 
 /**
- * The status of a changed document from the validator's verdict. `integrity` are the errors of an ID/IDREF check of
- * the document, which the validator does not resolve itself: one that is not about the rule of the change is a
- * second cause.
+ * Classifies a mutated document using validation diagnostics and ID/IDREF integrity errors. An integrity
+ * error unrelated to the intended violation counts as another cause.
  */
 export function classifyVerdict(
   verdict: Verdict,
@@ -289,9 +286,8 @@ type Read = Classification['diagnostics'][number] & { known: boolean; carrier: b
 const HEAD = /^(?:[\w .'-]*(?:error|warning) ?: |Element ')/;
 
 /**
- * The messages of a verdict, each whole: a value or pattern with a line break makes libxml2 write its message over
- * several lines. A line without a head of its own continues the message before while that one has a quote open;
- * any other line is a message of its own.
+ * Splits validator output into complete diagnostics, preserving quoted values or patterns that contain
+ * line breaks. A line without a diagnostic header continues an open quote; otherwise it starts a new message.
  */
 function joined(verdict: Verdict): { message: string; line?: number }[] {
   const out: { message: string; line?: number }[] = [];

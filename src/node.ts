@@ -28,7 +28,7 @@ export function fileInput(entryFile: string, access: FileAccessOptions = {}): Ge
   try {
     return localInput(entryFile, access);
   } catch (error) {
-    // Invalid options stay what they are elsewhere in the API.
+    // Preserve the same option errors as the in-memory API.
     if (error instanceof GenerateError || error instanceof TypeError || error instanceof RangeError) throw error;
     const message = error instanceof Error ? error.message : String(error);
     throw new GenerateError(message, [{ code: 'missing-file', severity: 'error', message, file: entryFile }]);
@@ -43,7 +43,7 @@ function realpathOrSelf(path: string): string {
 }
 function localInput(entryFile: string, access: FileAccessOptions): GenerateInput {
   const { maxFileBytes } = effectiveLimits(access.limits);
-  // The entry where it is named, not where a symlink leads: its directory is the default base.
+  // Use the entry path's directory as the default boundary, before resolving symlinks.
   const lexical = resolve(entryFile);
   const named = join(realpathOrSelf(dirname(lexical)), basename(lexical));
   const base = realpathSync(resolve(access.baseDirectory ?? dirname(named)));

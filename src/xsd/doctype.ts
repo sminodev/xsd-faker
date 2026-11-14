@@ -6,7 +6,7 @@
 // root element whose default the root element already carries, explicitly and with the same value. A PUBLIC or SYSTEM
 // identifier is only text and is never read. The scan follows the XML grammar where it matters for the decision:
 // comments end at the first `-->` after `<!--`, white space stands where XML requires it, names consist of XML name
-// characters. It reads the text once, from left to right.
+// characters. The scan takes time proportional to the input length.
 
 import { NAME_CHAR, NAME_START_CHAR } from './namechars.js';
 

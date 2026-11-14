@@ -69,8 +69,7 @@ See [the API](docs/api.md) for those forms and batch generation.
 `status: 'valid'` means that the XML passed the configured XSD validator and the generator reported no
 error-level diagnostics. Generation calls can also reject, for example on loading errors, invalid
 options or resource limits; see the [error contract](docs/api.md#errors). It does not mean that the JSON
-was checked against a JSON Schema or that the
-fixture satisfies business rules outside the XSD.
+was checked against a JSON Schema or that the fixture satisfies business rules outside the XSD.
 
 ## Choose what to generate
 
@@ -102,15 +101,13 @@ recursion limits, repetitions and validation results.
 
 ## Sample values
 
-By default, values come from the facets alone, such as `Qdnnfugzywaeazi` for a last name. With a locale,
-fields whose names say what they hold get readable values: names, addresses, dates, phone numbers, e-mail
-addresses and free text. `locale: 'de'` and `locale: 'en'` are built in; the
-[locale guide](docs/locales.md) explains which fields are recognized and how to add a locale. Dates count
-from a fixed reference date, `2026-01-15T12:00:00Z` unless `referenceDate` names another, so generation does
-not depend on today's date.
+By default, values are generated from the schema's facets. A locale supplies readable names, addresses,
+dates, contact details and free text for recognized fields. The built-in locales are `de` and `en`; the
+[locale guide](docs/locales.md) explains field recognition and how to add a locale. Dates are relative to
+`referenceDate`, which defaults to `2026-01-15T12:00:00Z`, so generation does not depend on today's date.
 
-Provide your own value lists for values a locale does not know, such as codes of your domain. A key is a
-path of local names or the name of a simple type:
+Use value lists for domain-specific data, such as product or diagnosis codes. Each key is a path of
+local names or the name of a simple type:
 
 ```js
 import { generateSampleFile } from 'xsd-faker/node';
@@ -132,13 +129,14 @@ on generated declarations take precedence. For more control, supply a `ValueSour
 ## JSON output
 
 The default compact form uses local names as property names, typed numbers and booleans, arrays for
-repeatable elements and for list values, arrays of objects for repeating groups, and `value` for simple
-content with attributes. Nil elements are `null`, an element with `xsi:type` names its type in `#type`,
-and wildcard content and elements of `xs:anyType` are mapped without the schema. Names that collide in
-the content model get planned keys: `{namespace}local` for elements of several namespaces, `@local` for
-an attribute named like an element; the name of the text property is reserved in every object. `INF`,
-`-INF` and `NaN` are strings. It has explicit limits: collisions the content model does not show and
-unsafe numeric conversions are refused rather than silently changing data.
+repeatable elements and list values, arrays of objects for repeating groups, and `value` for complex
+types with simple content. Nil elements are `null`, and an element with `xsi:type` names its type in
+`#type`. Wildcard content and elements of `xs:anyType` are mapped without the schema.
+
+Names that collide in the content model use qualified keys: `{namespace}local` for elements from several
+namespaces, `@local` for an attribute named like an element. The text property is reserved in every object. `INF`,
+`-INF` and `NaN` are strings. Collisions that cannot be resolved from the content model and unsafe
+numeric conversions make compact JSON unavailable; see [JSON output](docs/output.md).
 
 Use `json: { mode: 'tree' }` or `--json-mode tree` when names, child order and lexical values matter.
 Use `json: { numbers: 'string' }` when consumers need decimal values as strings. These are different
@@ -147,9 +145,9 @@ contracts, not interchangeable representations. See [JSON output](docs/output.md
 ## Invalid samples
 
 `xsd-faker invalid` writes documents a consumer must reject. Each is a valid sample changed to break one rule of
-the schema, such as a value outside a facet, a missing element or an unknown attribute. The validator's messages
-then decide whether it breaks exactly that rule. Confirmed samples are written as files, and `manifest.json`
-lists every sample with its status:
+the schema, such as a value outside a facet, a missing element or an unknown attribute. Validation diagnostics
+are checked to confirm that the document violates the intended rule. Confirmed samples are written as files;
+`manifest.json` lists every sample with its status:
 
 ```sh
 npx xsd-faker invalid examples/retail/order.xsd --out-dir order-invalid --count 3 --coverage --seed 7
