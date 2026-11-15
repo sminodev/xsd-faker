@@ -4,7 +4,7 @@
 
 import type { Element } from '@xmldom/xmldom';
 import type { ChoiceOccurrence, ElementFacts, ValueFacts } from '../generate/walker.js';
-import { occurs } from '../generate/walker.js';
+import { occurs } from '../generate/choices.js';
 import { createRng, type Rng } from '../rng.js';
 import { judge, type Verdict, type XmlValidator } from '../validate/xmllint.js';
 import { generateValue } from '../values/generate.js';

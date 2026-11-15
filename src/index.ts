@@ -2,15 +2,17 @@ import type { Element } from '@xmldom/xmldom';
 import {
   type ChoiceContext,
   type ChoiceStrategy,
-  type ChoiceVisit,
   choiceId,
-  type NilMode,
   firstBranch,
   type OptionalMode,
   preferBranches,
   randomBranch,
   reachableChoices,
   smallestBranch,
+} from './generate/choices.js';
+import {
+  type ChoiceVisit,
+  type NilMode,
   Walker,
   LimitError,
   type ElementFacts,
@@ -40,16 +42,9 @@ import {
   type SchemaSource,
   XS,
 } from './xsd/schema-set.js';
-export type {
-  ChoiceContext,
-  ChoiceKind,
-  ChoiceSettings,
-  ChoiceStrategy,
-  ChoiceVisit,
-  NilMode,
-  OptionalMode,
-} from './generate/walker.js';
-export { firstBranch, randomBranch, smallestBranch, preferBranches } from './generate/walker.js';
+export type { ChoiceContext, ChoiceKind, ChoiceSettings, ChoiceStrategy, OptionalMode } from './generate/choices.js';
+export type { ChoiceVisit, NilMode } from './generate/walker.js';
+export { firstBranch, randomBranch, smallestBranch, preferBranches } from './generate/choices.js';
 export { toJson, JsonMappingError } from './json/serialize.js';
 export type { JsonOptions, JsonValue } from './json/serialize.js';
 export type { ValueContext, ValueScope, ValueSource } from './values/source.js';

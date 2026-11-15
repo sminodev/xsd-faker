@@ -15,7 +15,8 @@ src/
                        translation and the XML name tables
   regex/               pattern parser and bounded string generation
   values/              facet values, value lists, composition and locale values
-  generate/walker.ts   XSD traversal and choice strategies
+  generate/walker.ts   XSD traversal: the instance tree, attributes, values and JSON keys
+  generate/choices.ts  branch selection, size estimates and reachable choices
   generate/alternatives.ts  substitution group members and xsi:type candidates
   generate/identities.ts    ID and IDREF planning with its integrity check
   xml/                 ordered instance tree and XML serialization

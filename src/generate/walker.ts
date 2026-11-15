@@ -43,67 +43,21 @@ import {
 } from '../xsd/schema-set.js';
 import { splitXmlSpace } from '../xml/space.js';
 import type { ExpandedPath, ExpandedStep } from '../mutate/path.js';
+import {
+  type ChoiceContext,
+  choiceId,
+  type ChoiceSettings,
+  type ChoiceStrategy,
+  occurs,
+  type OptionalMode,
+  RANDOM_OPTIONAL_CHANCE,
+} from './choices.js';
 
-export type OptionalMode = 'none' | 'all' | 'random';
 /** Whether nillable elements may be written with xsi:nil="true". */
 export type NilMode = 'never' | 'random';
 
-/** Where a choice comes from: an xs:choice, a substitution group, or the types xsi:type can name. */
-export type ChoiceKind = 'choice' | 'substitution' | 'type';
-
-export interface ChoiceContext {
-  /**
-   * The xs:choice element; for a substitution group the xs:element particle that refers to the head; for xsi:type
-   * the element declaration.
-   */
-  node: Element;
-  /**
-   * The alternatives: the particles of an xs:choice that may occur (maxOccurs > 0); the global element declarations
-   * of a substitution group, the head first unless it is abstract; or the complex type definitions an element may
-   * have, its declared type first unless it is abstract.
-   */
-  branches: Element[];
-  /** Default: choice. */
-  kind?: ChoiceKind;
-  path: readonly string[];
-  set: SchemaSet;
-  rng: Rng;
-  /** Depth of the element whose content holds the choice; the root element is depth 0. */
-  depth?: number;
-  /** The settings that decide how much content a branch produces. Without them: required content, once. */
-  settings?: ChoiceSettings;
-}
-
-/** The generation settings a choice strategy can take into account. */
-export interface ChoiceSettings {
-  /** effective optional-element policy */
-  optionalElements: OptionalMode;
-  /** requested occurrences before clamping to minOccurs and maxOccurs */
-  repeat: number;
-  /** optional elements are left out from this depth on */
-  maxDepth: number;
-  /** content nested deeper than this cannot be generated */
-  maxTotalDepth: number;
-}
-
-/** Chance that `optional: 'random'` includes an optional element or attribute. */
-const RANDOM_OPTIONAL_CHANCE = 0.5;
 /** Chance that `nil: 'random'` writes a nillable element without a fixed value as nil. */
 const RANDOM_NIL_CHANCE = 0.5;
-
-/**
- * How much an optional particle counts when `smallest` estimates a branch: its expected share of the output.
- * `all` generates it, `none` leaves it out, `random` includes it with RANDOM_OPTIONAL_CHANCE, so estimate and
- * generation change together; docs/api.md states the weights.
- */
-export function optionalWeight(mode: OptionalMode): number {
-  if (mode === 'all') return 1;
-  if (mode === 'random') return RANDOM_OPTIONAL_CHANCE;
-  return 0;
-}
-
-/** Picks the branch of a choice, as an index into `branches`. */
-export type ChoiceStrategy = (choice: ChoiceContext) => number;
 
 export interface WalkOptions {
   /** Shorthand for both policies; separate element and attribute settings take precedence. */
@@ -118,68 +72,19 @@ export interface WalkOptions {
   /** How often a repeatable element occurs: at least minOccurs, at most maxOccurs. */
   repeat: number;
   choice: ChoiceStrategy;
-  /** Beyond this depth only required content is generated, so recursive types end. */
+  /** Stops automatic optional expansion at this depth; reach may go beyond it. maxTotalDepth still applies. */
   maxDepth: number;
   values: ValueSource;
   /**
-   * Paths the document has to contain: optional ancestors, branches, substitution group members and xsi:type
-   * alternatives along each path are taken, whatever the other settings say.
+   * Requested paths: include their optional ancestors and select the branches, substitution group members and
+   * xsi:type alternatives that reach them, within the schema's constraints and hard generation limits.
    */
   reach?: readonly ExpandedPath[];
-  /** Collects what the schema says about each node of the tree in `Walker.facts`, for planning changes to it. */
+  /** Collects schema metadata for each generated node in `Walker.facts`, used for mutation planning. */
   facts?: boolean;
   /** Whether the caller supplies the value at this place; such ID and IDREF values are checked, not replanned. */
   userSupplied?: (target: Pick<ValueContext, 'path' | 'kind' | 'typeName' | 'baseTypeNames'>) => boolean;
   rng: Rng;
-}
-
-export const firstBranch: ChoiceStrategy = () => 0;
-export const randomBranch: ChoiceStrategy = ({ branches, rng }) => rng.int(0, branches.length - 1);
-
-/** The first branch that declares or refers to an element of one of these local names; otherwise `fallback`. */
-export function preferBranches(names: readonly string[], fallback: ChoiceStrategy = firstBranch): ChoiceStrategy {
-  return (context) => {
-    const index = context.branches.findIndex((b) => names.some((name) => mentions(context.set, b, name, new Set())));
-    return index >= 0 ? index : fallback(context);
-  };
-}
-
-/**
- * Whether a particle declares or refers to an element of that local name; looks into model groups, not into types.
- * A type alternative of xsi:type mentions its own name.
- */
-function mentions(set: SchemaSet, particle: Element, name: string, seen: Set<Element>): boolean {
-  switch (particle.localName) {
-    case 'complexType':
-      return attr(particle, 'name') === name;
-    case 'element': {
-      const ref = attr(particle, 'ref');
-      return (ref === undefined ? attr(particle, 'name') : ref.slice(ref.indexOf(':') + 1)) === name;
-    }
-    case 'sequence':
-    case 'choice':
-    case 'all':
-      return xsChildren(particle).some((c) => mentions(set, c, name, seen));
-    case 'group': {
-      const group = set.reference('group', particle);
-      if (!group || seen.has(group.node)) {
-        return false;
-      }
-      seen.add(group.node);
-      return xsChildren(group.node).some((c) => mentions(set, c, name, seen));
-    }
-    default:
-      return false;
-  }
-}
-
-export function occurs(node: Element): { min: number; max: number } {
-  const min = attr(node, 'minOccurs');
-  const max = attr(node, 'maxOccurs');
-  return {
-    min: min === undefined ? 1 : Number(min),
-    max: max === undefined ? 1 : max === 'unbounded' ? Infinity : Number(max),
-  };
 }
 
 /** An attribute as a complex type uses it: the xs:attribute element (a declaration or a ref) and its document. */
@@ -210,7 +115,7 @@ interface TypeNames {
 
 const NO_TYPE_NAMES: TypeNames = { baseTypeNames: [] };
 
-/** What the content model says about one JSON object: an element's content or an occurrence of a repeated group. */
+/** Content-model metadata for one JSON object: an element or a repeated-group occurrence. */
 interface ObjectScope {
   /** the property of each repeated group, by group definition or anonymous particle */
   keys: Map<Element, string>;
@@ -226,7 +131,7 @@ interface ObjectScope {
   wildcards: Map<string, string>;
 }
 
-/** Where a particle writes: its JSON object and the repeated group occurrences around it. */
+/** Destination JSON object and enclosing repeated-group occurrences for a particle. */
 interface Place {
   scope: ObjectScope;
   trail: readonly GroupOccurrence[];
@@ -247,11 +152,11 @@ export interface ChoiceVisit {
   kind?: 'substitution' | 'type';
   /** the expanded name of each alternative, for substitution groups and xsi:type */
   alternatives?: string[];
-  /** a path of `reach` decided the branch, not the choice strategy */
+  /** branch fixed by a `reach` path */
   fixed?: true;
 }
 
-/** Where a particle stands in the content model of its element. */
+/** Position of a particle in its element's content model. */
 export interface ParticleContext {
   /** the model group directly around it */
   compositor: 'sequence' | 'choice' | 'all' | 'none';
@@ -261,14 +166,14 @@ export interface ParticleContext {
   required: boolean;
 }
 
-/** What the schema says about an element of the tree. */
+/** Schema metadata for a generated element. */
 export interface ElementFacts {
   kind: 'element';
   decl: Element;
   nillable: boolean;
   /** the fixed value of the declaration */
   fixed?: string;
-  /** the particle that wrote it, and how many elements that particle wrote at this place */
+  /** the originating particle and its occurrence count at this position */
   slot?: { min: number; max: number; count: number } & ParticleContext;
   /** inside content admitted by a wildcard */
   schemaless: boolean;
@@ -304,13 +209,13 @@ export interface ChoiceOccurrence {
   context: ParticleContext;
 }
 
-/** What the schema says about a simple value: the text of an element or an attribute. */
+/** Schema metadata for element text or an attribute value. */
 export interface ValueFacts {
   kind: 'value';
   facets: Facets;
   /** the fixed value of the declaration or attribute use */
   fixed?: string;
-  /** an attribute that has to be there */
+  /** a required attribute */
   required: boolean;
   schemaless: boolean;
   /** the fixed value belongs to an attribute use that refers to a global attribute */
@@ -319,7 +224,7 @@ export interface ValueFacts {
 
 const TOP: ParticleContext = { compositor: 'none', repeated: false, required: true };
 
-/** A path of `reach` on its way: `step` is the step the next element or attribute has to match. */
+/** Progress along a `reach` path; `step` identifies the next element or attribute to match. */
 interface Active {
   path: ExpandedPath;
   step: number;
@@ -356,11 +261,11 @@ export class Walker {
   private instances = 0;
   /** the paths of `reach` the document contains, by index */
   private readonly reached = new Set<number>();
-  /** what the schema says about each node of the tree, with the `facts` option */
+  /** schema metadata for each node, collected when `facts` is enabled */
   readonly facts = new Map<object, ElementFacts | ValueFacts>();
   /** choice occurrences by the children array of the element they belong to, until that element is complete */
   private readonly pendingChoices = new Map<InstanceNode[], ChoiceOccurrence[]>();
-  /** whether a particle can give an element of a step, by particle and step */
+  /** cached path-step matches, by particle and step */
   private readonly offered = new Map<Element, Map<string, boolean>>();
 
   constructor(
@@ -531,7 +436,7 @@ export class Walker {
     return steps;
   }
 
-  /** Whether a particle can give an element of a step, without entering the content of elements. */
+  /** Whether a particle can match a path step, without descending into element content. */
   private offers(node: Element, doc: SchemaDocument, step: ExpandedStep, seen = new Set<Element>()): boolean {
     const key = `${step.ns ?? '*'}|${step.name}`;
     const known = this.offered.get(node)?.get(key);
@@ -610,15 +515,15 @@ export class Walker {
     });
   }
 
-  /** An element of xs:anyType, declared or for want of a type: empty, or its value constraint as text. */
+  /** An xs:anyType element: empty, or containing its fixed/default value as text. */
   private anyType(out: InstanceElement, fixed: string | undefined): void {
     out.anyType = true;
     if (fixed !== undefined) out.children = [text(fixed)];
   }
 
   /**
-   * The complex type an element gets: its declared type, or a type derived from it, written as xsi:type. Chosen like
-   * a branch when there is more than one; an abstract type without a concrete derived type is reported.
+   * Selects the declared type or an allowed derived type. Multiple alternatives use the choice strategy;
+   * derived types are written as xsi:type. An abstract type without a concrete alternative is reported.
    */
   private typeFor(
     out: InstanceElement,
@@ -653,7 +558,7 @@ export class Walker {
     return chosen;
   }
 
-  /** Asks the choice strategy among substitution group members or types, and records the decision. */
+  /** Selects a substitution group member or type using the choice strategy and records the decision. */
   private decide(
     kind: 'substitution' | 'type',
     node: Element,
@@ -674,7 +579,7 @@ export class Walker {
     return index;
   }
 
-  /** The branch the strategy picks, checked. */
+  /** Validates the branch index returned by the choice strategy. */
   private ask(context: Pick<ChoiceContext, 'node' | 'branches' | 'path' | 'depth' | 'kind'>): number {
     const index = this.options.choice({
       ...context,
@@ -723,9 +628,8 @@ export class Walker {
   }
 
   /**
-   * The prefixes in a QName value need a declaration in the document; the schema says what they stand for. A
-   * generated value, from a pattern for example, may use a prefix the schema does not bind: any namespace makes it a
-   * QName, so `xsi` gets its own and every other prefix one of its own.
+   * Declares prefixes used in QName values. Schema bindings take precedence. Unbound generated prefixes
+   * receive placeholder namespaces, except `xsi`, which uses the XML Schema instance namespace.
    */
   private bindPrefixes(out: InstanceElement, facets: Facets, value: string, scope: Element, generated: boolean): void {
     if (!holdsQNames(facets)) return;
@@ -912,7 +816,7 @@ export class Walker {
     if (plan.mixed) out.mixed = true;
   }
 
-  /** Reads a content model once, branches not taken included, because JSON names must not depend on the sample. */
+  /** Plans JSON keys from the entire content model so keys do not depend on the selected branches. */
   private objectScope(
     models: readonly { node: Element; doc: SchemaDocument }[],
     attributes: ReadonlyMap<string, AttributeUse> = new Map(),
@@ -927,7 +831,7 @@ export class Walker {
     };
     for (const { node, doc } of models) this.declare(node, doc, scope, new Set());
     for (const key of [...scope.elements.keys(), ...attributes.keys()]) scope.names.add(localOf(key));
-    // A local name of several namespaces is a collision: every one of them takes its expanded name.
+    // Qualify every name in a namespace collision, including alternatives absent from this sample.
     for (const names of byLocalName(scope.elements.keys()).values()) {
       if (names.length > 1) for (const name of names) scope.elementKeys.set(name, name);
     }
@@ -967,7 +871,7 @@ export class Walker {
     }
   }
 
-  /** How to enter each occurrence of a model group: a repeated group is an object per occurrence. */
+  /** Places each repeated-group occurrence in its JSON scope. */
   private entering(
     group: Element,
     max: number,
@@ -1069,8 +973,8 @@ export class Walker {
     }
     const own = xsChildren(owner).find((c) => MODEL_GROUPS.includes(c.localName ?? ''));
     const groups = own ? [{ node: own, doc }] : [];
-    // mixed on complexContent wins over mixed on the type. An extension that says nothing keeps the mixed content of
-    // its base, as libxml2 does.
+    // mixed on complexContent overrides mixed on the type. An extension without its own setting inherits
+    // mixed content from its base, matching libxml2.
     const flag = (value: string | undefined) =>
       value === 'true' || value === '1' ? true : value === 'false' || value === '0' ? false : undefined;
     const declared = flag(complexContent && attr(complexContent, 'mixed')) ?? flag(attr(typeNode, 'mixed'));
@@ -1305,7 +1209,7 @@ export class Walker {
       return;
     }
     let times = this.count(min, max, depth);
-    // A path of reach takes the particle as often as its position needs.
+    // Include enough occurrences to satisfy the position in the reach path.
     const wants = ahead.length === 0 ? [] : this.needed(ahead, out).filter((step) => this.offers(node, doc, step));
     if (wants.length > 0) {
       const more =
@@ -1520,10 +1424,6 @@ export class Walker {
   }
 }
 
-/**
- * The JSON property of a repeated group: `#sequence`, `#choice`, or `#` and the name of a referenced group; a further
- * group of the same name adds `:2`, `:3`. The same group reached twice shares its property.
- */
 /** The local name of an expanded name `{ns}local`. */
 function localOf(name: string): string {
   return name.slice(name.indexOf('}') + 1);
@@ -1558,235 +1458,13 @@ function attributeKeys(
   return out;
 }
 
+/**
+ * Assigns a repeated group's JSON property: `#sequence`, `#choice`, or `#` and a referenced group's name.
+ * Further groups of the same name add `:2`, `:3`. The same group reached twice keeps its property.
+ */
 function claimGroupKey(scope: ObjectScope, group: Element, name: string): void {
   if (scope.keys.has(group)) return;
   const count = (scope.groupNames.get(name) ?? 0) + 1;
   scope.groupNames.set(name, count);
   scope.keys.set(group, count === 1 ? `#${name}` : `#${name}:${count}`);
-}
-
-/** Stable within a schema set: document path and structural declaration path. */
-export function choiceId(set: SchemaSet, node: Element): string {
-  const parts: string[] = [];
-  let current: Element | undefined = node;
-  while (current) {
-    const parent: Element | undefined =
-      current.parentNode?.nodeType === 1 ? (current.parentNode as Element) : undefined;
-    const position = parent ? xsChildren(parent).indexOf(current) : 0;
-    parts.unshift(`${current.localName}[${position}]`);
-    current = parent;
-  }
-  return `${set.at(node).file ?? ''}#${parts.join('/')}`;
-}
-
-/** Settings assumed by `smallest` when a caller builds a ChoiceContext without them: required content, once. */
-const REQUIRED_ONLY: ChoiceSettings = { optionalElements: 'none', repeat: 1, maxDepth: 12, maxTotalDepth: 64 };
-const PARTICLES = new Set(['element', 'sequence', 'choice', 'all', 'group', 'any', 'complexType']);
-const estimators = new WeakMap<SchemaSet, Map<string, (particle: Element, depth: number) => number>>();
-
-/**
- * Expected number of elements one particle adds, as the walker generates it with these settings. Occurrences are
- * `repeat` clamped to the particle's bounds. An optional particle counts with optionalWeight() and not at all from
- * maxDepth on, so recursion through optional content ends as generation does. A nested choice counts with its
- * smallest branch. Content deeper than maxTotalDepth, an unknown reference or a circular group or derivation make the
- * cost infinite. `depth` is the depth of the element whose content holds the particle.
- */
-export function expectedSize(set: SchemaSet, particle: Element, depth: number, settings = REQUIRED_ONLY): number {
-  const key = `${settings.optionalElements}|${settings.repeat}|${settings.maxDepth}|${settings.maxTotalDepth}`;
-  let bySettings = estimators.get(set);
-  if (!bySettings) {
-    bySettings = new Map();
-    estimators.set(set, bySettings);
-  }
-  let estimate = bySettings.get(key);
-  if (!estimate) {
-    estimate = estimator(set, settings);
-    bySettings.set(key, estimate);
-  }
-  return estimate(particle, depth);
-}
-
-function estimator(set: SchemaSet, settings: ChoiceSettings): (particle: Element, depth: number) => number {
-  const weight = optionalWeight(settings.optionalElements);
-  const memo = new Map<Element, Map<number, number>>();
-  // Groups and types being computed, by depth: meeting one again at the same depth is a cycle without an element.
-  const active = new Map<Element, Set<number>>();
-  const guarded = (node: Element, depth: number, compute: () => number): number => {
-    const busy = active.get(node) ?? new Set<number>();
-    if (busy.has(depth)) return Infinity;
-    busy.add(depth);
-    active.set(node, busy);
-    try {
-      return compute();
-    } finally {
-      busy.delete(depth);
-    }
-  };
-  const sum = (nodes: Element[], depth: number): number =>
-    nodes.filter((n) => PARTICLES.has(n.localName ?? '')).reduce((total, n) => total + occurrence(n, depth), 0);
-  const occurrence = (node: Element, depth: number): number => {
-    const cached = memo.get(node)?.get(depth);
-    if (cached !== undefined) return cached;
-    const { min, max } = occurs(node);
-    let value = 0;
-    const share = max === 0 ? 0 : min > 0 ? 1 : depth >= settings.maxDepth ? 0 : weight;
-    if (share > 0) value = share * Math.min(max, Math.max(min, settings.repeat)) * single(node, depth);
-    const byDepth = memo.get(node) ?? new Map<number, number>();
-    byDepth.set(depth, value);
-    memo.set(node, byDepth);
-    return value;
-  };
-  const single = (node: Element, depth: number): number => {
-    switch (node.localName) {
-      case 'element': {
-        if (depth + 1 > settings.maxTotalDepth) return Infinity;
-        const ref = attr(node, 'ref');
-        if (ref === undefined) return 1 + content(node, depth + 1);
-        // A substitution group counts with its smallest allowed member, like a nested choice.
-        const head = set.lookup('element', set.resolveQName(node, ref));
-        const members = head ? substitutionCandidates(set, head) : [];
-        return members.length > 0 ? Math.min(...members.map((m) => 1 + content(m.node, depth + 1))) : Infinity;
-      }
-      case 'complexType':
-        // A type xsi:type can name, for the element at `depth`.
-        return depth > settings.maxTotalDepth ? Infinity : 1 + typeContent(node, depth);
-      case 'sequence':
-      case 'all':
-        return sum(xsChildren(node), depth);
-      case 'choice': {
-        const branches = xsChildren(node).filter((c) => PARTICLES.has(c.localName ?? '') && occurs(c).max > 0);
-        return branches.length > 0 ? Math.min(...branches.map((b) => occurrence(b, depth))) : 0;
-      }
-      case 'group': {
-        const group = set.reference('group', node);
-        return group ? guarded(group.node, depth, () => sum(xsChildren(group.node), depth)) : Infinity;
-      }
-      case 'any':
-        return 1;
-      default:
-        return 0;
-    }
-  };
-  const content = (decl: Element, depth: number): number => {
-    const declared = declaredType(set, decl);
-    if (declared.kind === 'named') {
-      const qname = declared.qname;
-      const complex = qname.ns === XS ? undefined : set.lookup('complexType', qname);
-      if (!complex) return 0;
-      // The types xsi:type can name count with the smallest one.
-      const types = typeCandidates(set, decl, complex);
-      return types.length > 0 ? Math.min(...types.map((t) => typeContent(t.node, depth))) : Infinity;
-    }
-    return declared.kind === 'anonymous' && declared.node.localName === 'complexType'
-      ? typeContent(declared.node, depth)
-      : 0;
-  };
-  const typeContent = (type: Element, depth: number): number =>
-    guarded(type, depth, () => {
-      if (xsChild(type, 'simpleContent')) return 0;
-      const complexContent = xsChild(type, 'complexContent');
-      const derivation = complexContent ? xsChildren(complexContent)[0] : undefined;
-      let base = 0;
-      if (derivation?.localName === 'extension') {
-        const qname = set.resolveQName(derivation, attr(derivation, 'base') ?? '');
-        const inherited = qname.ns === XS ? undefined : set.lookup('complexType', qname);
-        if (inherited) base = typeContent(inherited.node, depth);
-      }
-      return base + sum(xsChildren(derivation ?? type), depth);
-    });
-  return occurrence;
-}
-
-/**
- * The branch with the smallest expected output under the context's settings (see expectedSize); the first such
- * branch on a tie. Without settings in the context, only required content counts.
- */
-export const smallestBranch: ChoiceStrategy = ({ branches, set, depth = 0, settings }) => {
-  let selected = 0;
-  let best = Infinity;
-  branches.forEach((branch, index) => {
-    const value = expectedSize(set, branch, depth, settings);
-    if (value < best) {
-      best = value;
-      selected = index;
-    }
-  });
-  return selected;
-};
-
-/**
- * The choices a particle can lead to, through element types, derivations, groups and every branch of nested
- * choices. Optional particles are followed only when `followOptional` is set. Depth limits are not applied.
- */
-export function reachableChoices(set: SchemaSet, particle: Element, followOptional: boolean): Element[] {
-  const out: Element[] = [];
-  const seen = new Set<Element>();
-  const visitType = (type: Element): void => {
-    if (seen.has(type)) return;
-    seen.add(type);
-    const complexContent = xsChild(type, 'complexContent');
-    const derivation = complexContent ? xsChildren(complexContent)[0] : undefined;
-    if (derivation?.localName === 'extension') {
-      const qname = set.resolveQName(derivation, attr(derivation, 'base') ?? '');
-      const inherited = qname.ns === XS ? undefined : set.lookup('complexType', qname);
-      if (inherited) visitType(inherited.node);
-    }
-    for (const child of xsChildren(derivation ?? type)) visit(child);
-  };
-  /** A declaration: its type, or with several types xsi:type can name, that decision and each of the types. */
-  const visitDeclaration = (decl: Element): void => {
-    const declared = declaredType(set, decl);
-    if (declared.kind === 'named') {
-      const qname = declared.qname;
-      const complex = qname.ns === XS ? undefined : set.lookup('complexType', qname);
-      if (!complex) return;
-      const types = typeCandidates(set, decl, complex);
-      if (types.length > 1) out.push(decl);
-      for (const type of types) visitType(type.node);
-    } else if (declared.kind === 'anonymous' && declared.node.localName === 'complexType') {
-      visitType(declared.node);
-    }
-  };
-  const visit = (node: Element): void => {
-    if (node.localName === 'complexType') {
-      visitType(node);
-      return;
-    }
-    if (seen.has(node) || !PARTICLES.has(node.localName ?? '')) return;
-    seen.add(node);
-    const { min, max } = occurs(node);
-    if (max === 0 || (min === 0 && !followOptional)) return;
-    switch (node.localName) {
-      case 'element': {
-        const ref = attr(node, 'ref');
-        const head = ref === undefined ? undefined : set.lookup('element', set.resolveQName(node, ref));
-        if (ref === undefined) {
-          visitDeclaration(node);
-          return;
-        }
-        // A substitution group is a decision of its own, and each member a branch below it.
-        const members = head ? substitutionCandidates(set, head) : [];
-        if (members.length > 1) out.push(node);
-        for (const member of members) visitDeclaration(member.node);
-        return;
-      }
-      case 'choice':
-        out.push(node);
-        for (const child of xsChildren(node)) visit(child);
-        return;
-      case 'sequence':
-      case 'all':
-        for (const child of xsChildren(node)) visit(child);
-        return;
-      case 'group': {
-        const group = set.reference('group', node);
-        if (group) for (const child of xsChildren(group.node)) visit(child);
-        return;
-      }
-      default:
-        return;
-    }
-  };
-  visit(particle);
-  return out;
 }
