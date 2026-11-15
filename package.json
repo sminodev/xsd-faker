@@ -18,6 +18,7 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "test:acceptance": "npm run build && node --test test/acceptance.test.mjs",
+    "test:consumer": "node test/consumer.mjs",
     "verify": "npm run typecheck && npm run lint && npm run build && npm test && node --test test/acceptance.test.mjs",
     "prepack": "npm run build && node -e \"require('node:fs').chmodSync('dist/bin.js', 0o755)\"",
     "lint": "eslint .",

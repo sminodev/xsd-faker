@@ -10,18 +10,19 @@ const manifest = (path: string) =>
     dependencies?: Record<string, string>;
   };
 
-describe('the packages', () => {
+// Checks the package manifests. test/consumer.mjs verifies installation and use of the tarballs.
+describe('the package manifests', () => {
   const faker = manifest('package.json');
   const locales = manifest('packages/locales/package.json');
 
-  it('each build their dist when packed, so a clean checkout packs complete tarballs', () => {
+  it('name a build before packing and dist among the files of each package', () => {
     for (const pkg of [faker, locales]) {
       expect(pkg.scripts?.prepack).toMatch(/npm run build/);
       expect(pkg.files).toContain('dist');
     }
   });
 
-  it('depend on each other in a version the locale package has', () => {
+  it('make xsd-faker depend on the version of the locale package', () => {
     const range = faker.dependencies?.['xsd-faker-locales'] ?? '';
     expect(range).toBe(`^${locales.version}`);
   });

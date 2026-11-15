@@ -85,9 +85,14 @@ must not turn operational failures into successful validation.
 npm run verify
 npm run format:check
 npm pack --dry-run
+npm run test:consumer
 npm pack
 npm pack --workspace packages/locales
 ```
+
+`npm run test:consumer` does the consumer check below automatically: it packs both packages from a clean copy of the
+sources, installs only the two tarballs into an empty project and generates XML there with the default validator,
+runs the command and compiles a TypeScript consumer. CI runs it on every supported Node version.
 
 Both packages build themselves when packed, so a clean checkout after `npm ci` gives complete tarballs. Install
 the pair, `xsd-faker` and `xsd-faker-locales`, into a separate consumer project. Use the exported package paths,

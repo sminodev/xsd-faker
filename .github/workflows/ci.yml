@@ -21,4 +21,5 @@ jobs:
       - run: npm run verify
       - run: npm run format:check
       - run: npm pack --dry-run
+      - run: npm run test:consumer
       - run: npm audit --omit=dev
