@@ -1,7 +1,7 @@
 {
   "name": "xsd-faker-locales",
   "version": "0.1.0",
-  "description": "Locale data for xsd-faker: names, addresses, contact patterns and common words.",
+  "description": "German and English names, addresses and contact details for test data, with a faker-js adapter.",
   "type": "module",
   "engines": {
     "node": ">=22.13"
@@ -24,5 +24,27 @@
     "SOURCES.md",
     "LICENSE"
   ],
-  "license": "MIT"
+  "license": "MIT",
+  "keywords": [
+    "xsd-faker",
+    "locale-data",
+    "test-data",
+    "fake-data",
+    "names",
+    "addresses",
+    "postcodes",
+    "german",
+    "english",
+    "faker",
+    "faker-js"
+  ],
+  "homepage": "https://github.com/sminodev/xsd-faker/tree/main/packages/locales#readme",
+  "bugs": {
+    "url": "https://github.com/sminodev/xsd-faker/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sminodev/xsd-faker.git",
+    "directory": "packages/locales"
+  }
 }

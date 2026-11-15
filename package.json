@@ -1,7 +1,7 @@
 {
   "name": "xsd-faker",
   "version": "0.2.0",
-  "description": "Generate reproducible XML and JSON test fixtures from XSD files.",
+  "description": "Generate sample XML and JSON test data from XSD (XML Schema) files.",
   "type": "module",
   "engines": {
     "node": ">=22.13"
@@ -51,6 +51,32 @@
     "vitest": "^5.1.0"
   },
   "license": "MIT",
+  "keywords": [
+    "xsd",
+    "xml-schema",
+    "xml",
+    "json",
+    "xsd-to-xml",
+    "xsd2xml",
+    "xml-from-xsd",
+    "xml-generator",
+    "sample-xml",
+    "sample-xml-generator",
+    "test-data",
+    "test-data-generator",
+    "mock-data",
+    "fake-data",
+    "fixtures",
+    "faker"
+  ],
+  "homepage": "https://github.com/sminodev/xsd-faker#readme",
+  "bugs": {
+    "url": "https://github.com/sminodev/xsd-faker/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sminodev/xsd-faker.git"
+  },
   "files": [
     "dist",
     "README.md",
