@@ -3,11 +3,12 @@
 All schemas and value overrides in this directory are synthetic. They are test fixtures, not official
 industry formats or production records.
 
-| Example   | Entry                    | What it demonstrates                                                                    |
-| --------- | ------------------------ | --------------------------------------------------------------------------------------- |
-| Retail    | `retail/order.xsd`       | Imports/includes, choices, groups, attributes, inheritance, mixed content and wildcards |
-| Insurance | `insurance/claim.xsd`    | Constrained identifiers, monetary simple content and alternative claim shapes           |
-| Logistics | `logistics/shipment.xsd` | An address, repeated packages, weight constraints and transport choices                 |
+| Example   | Entry                    | What it demonstrates                                                                                                                               |
+| --------- | ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Retail    | `retail/order.xsd`       | Imports/includes, choices, groups, attributes, inheritance, mixed content and wildcards                                                            |
+| Insurance | `insurance/claim.xsd`    | Constrained identifiers, monetary simple content and alternative claim shapes                                                                      |
+| Logistics | `logistics/shipment.xsd` | An address, repeated packages, weight constraints and transport choices                                                                            |
+| Order     | `order/order.xsd`        | Office supplies order with locale data and bounded values; used in the [development walkthrough](../docs/development.md#a-walk-through-one-schema) |
 
 Each `generated/` directory contains three paired XML/JSON files and the `manifest.json` written by the
 CLI. A choice coverage report is scoped to encountered choices; it is not every possible branch

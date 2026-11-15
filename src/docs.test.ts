@@ -2,6 +2,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
+import { generateSampleFile } from './node.js';
 
 const root = join(import.meta.dirname, '..');
 const read = (file: string) => readFileSync(join(root, file), 'utf8');
@@ -84,5 +85,23 @@ describe('documentation', () => {
     const locales = [...(exported.get('packages/locales/src/index.ts') ?? [])];
     expect(locales.length).toBeGreaterThan(5);
     expect(locales.filter((name) => !own.has(name))).toEqual([]);
+  });
+});
+
+describe('the walk-through of the development guide', () => {
+  it('shows the XML and JSON the example generates with seed 7', async () => {
+    const guide = read('docs/development.md');
+    const section = guide.slice(guide.indexOf('## A walk through one schema'), guide.indexOf('## Checks'));
+    const xml = /```xml\n([\s\S]*?)```/.exec(section)?.[1];
+    const json = /```json\n([\s\S]*?)```/.exec(section)?.[1];
+    const sample = await generateSampleFile(join(root, 'examples/order/order.xsd'), {
+      seed: 7,
+      optionalElements: 'all',
+      locale: 'de',
+      samples: JSON.parse(read('examples/order/values.json')) as Record<string, string[]>,
+    });
+    expect(sample.status).toBe('valid');
+    expect(sample.xml).toBe(xml);
+    expect(sample.json).toEqual(JSON.parse(json ?? 'null'));
   });
 });

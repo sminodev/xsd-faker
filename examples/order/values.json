@@ -1,0 +1,7 @@
+{
+  "/Order/@created": ["2026-01-15T09:30:00Z"],
+  "/Order/Wanted": ["2026-01-22"],
+  "/Order/DeliveryDate": ["2026-01-22"],
+  "/Order/DeliveryTime": ["10:00:00"],
+  "/Order/Line/Tag": ["Bürobedarf"]
+}
