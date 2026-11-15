@@ -1,6 +1,6 @@
 {
   "name": "xsd-faker-locales",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "German and English names, addresses and contact details for test data, with a faker-js adapter.",
   "type": "module",
   "engines": {
