@@ -1498,7 +1498,8 @@ test('CLI writes one pair from the same sample plus a manifest', async () => {
     const manifest = JSON.parse(readFileSync(join(out, 'manifest.json'), 'utf8'));
     assert.equal(manifest.samples[0].status, 'valid');
     assert.equal(manifest.jsonSchemaValidation, 'not-performed');
-    assert.equal(manifest.package.version, '0.2.0');
+    const { version } = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
+    assert.equal(manifest.package.version, version);
     assert.equal(manifest.generation.locale, 'de');
     assert.equal(manifest.generation.seed, 7);
     assert.equal(await run([order, '--format', 'both', '--out-dir', out], c.io, validator), 1);
