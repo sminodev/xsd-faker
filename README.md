@@ -74,6 +74,23 @@ was checked against a JSON Schema or that the fixture satisfies business rules o
 
 ## Choose what to generate
 
+Use these CLI options for common generation tasks:
+
+| Goal                                     | Options                                                                                  |
+| ---------------------------------------- | ---------------------------------------------------------------------------------------- |
+| Required content only                    | the defaults                                                                             |
+| Include optional elements and attributes | `--optional-elements all --optional-attributes all`                                      |
+| Repeat elements or groups                | `--repeat 2`, within `minOccurs` and `maxOccurs`                                         |
+| Smallest choice branch                   | `--choice smallest`                                                                      |
+| Choice branches together in a template   | `--choice all --template`                                                                |
+| Explore choices across valid documents   | `--count <n> --coverage --out-dir <dir>`                                                 |
+| A specific element or occurrence         | `--reach '/{urn:example:order}Order/{urn:example:order}Line[2]'`                         |
+| Readable values                          | `--locale de` or `--locale en`                                                           |
+| Your own values                          | `--values values.json`; see [Sample values](#sample-values)                              |
+| XML and JSON                             | `--format both --out-dir <dir>`                                                          |
+| Documents that break one rule            | `xsd-faker invalid <entry.xsd> --out-dir <dir>`; see [Invalid samples](#invalid-samples) |
+| The same output again                    | the same inputs, package versions, options and `--seed` (default: 1)                     |
+
 ```sh
 # Discover roots before choosing one.
 npx xsd-faker examples/retail/order.xsd --list-roots
@@ -98,7 +115,9 @@ An incomplete coverage run writes its valid samples but exits with code 2. Use a
 when trying a larger batch.
 
 Run `npx xsd-faker --help` for all options. The [generation rules](docs/generation.md) explain defaults,
-recursion limits, repetitions and validation results.
+recursion limits, repetitions and validation results. For recursive schemas, `--optional-depth 3` limits
+optional-element expansion. Required descendants and paths requested with `--reach` can extend beyond
+this limit.
 
 ## Sample values
 
@@ -107,8 +126,10 @@ dates, contact details and free text for recognized fields. The built-in locales
 [locale guide](docs/locales.md) explains field recognition and how to add a locale. Dates are relative to
 `referenceDate`, which defaults to `2026-01-15T12:00:00Z`, so generation does not depend on today's date.
 
-Use value lists for domain-specific data, such as product or diagnosis codes. Each key is a path of
-local names or the name of a simple type:
+Use value lists for domain-specific data, such as product or diagnosis codes. Each key is either the
+full path of local names from the root element, such as `/Order/Title` or `/Order/@version`, or the name
+of a simple type, such as `Currency`. Value-list paths do not support namespace prefixes, wildcards or
+abbreviated segments such as `…`:
 
 ```js
 import { generateSampleFile } from 'xsd-faker/node';
@@ -123,8 +144,16 @@ const sample = await generateSampleFile('examples/retail/order.xsd', {
 });
 ```
 
-Values from these lists and from a locale must still meet the supported facets. `fixed` and `default` values
-on generated declarations take precedence. For more control, supply a `ValueSource`; see
+On the command line, put the lists in a JSON file:
+
+```sh
+npx xsd-faker examples/retail/order.xsd --values examples/retail/values.json
+```
+
+Values from these lists and from a locale must still meet the supported facets. A key that matches no
+element or attribute, or whose values all fail the facets, is skipped without an error, so check the
+output after adding a key. `fixed` and `default` values on generated declarations take precedence.
+For more control, supply a `ValueSource`; see
 [custom values](docs/api.md#custom-values).
 
 ## JSON output

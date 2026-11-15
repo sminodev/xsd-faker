@@ -24,6 +24,7 @@
     "SOURCES.md",
     "LICENSE"
   ],
+  "author": "mino (https://github.com/sminodev)",
   "license": "MIT",
   "keywords": [
     "xsd-faker",
