@@ -347,15 +347,19 @@ npm pack
 npm pack --workspace packages/locales
 ```
 
-`npm run test:consumer` does the consumer check below automatically: it packs both packages from a clean copy of the
-sources, installs only the two tarballs into an empty project and generates XML there with the default validator,
-runs the command and compiles a TypeScript consumer. CI runs it on every supported Node version.
+`npm run test:consumer` packs both packages from a clean source copy and installs the tarballs into an empty
+project. It generates XML with the default validator, runs the installed CLI and compiles a TypeScript
+consumer against the packaged declarations. CI runs this check on Node.js 22.13.0 and 24.
 
 Both packages build themselves when packed, so a clean checkout after `npm ci` gives complete tarballs. Install
 the pair, `xsd-faker` and `xsd-faker-locales`, into a separate consumer project. Use the exported package paths,
 not imports from `src/`. Verify XML generation with the default validator on the supported Node
 versions. The package includes `dist/`, public documentation, synthetic examples, `LICENSE` and the npm manifest.
 Test sources are excluded.
+
+Build release tarballs from a fresh checkout. The build updates `dist/` but does not remove output left by
+deleted or moved source files. Packing an existing working directory can therefore include obsolete modules;
+inspect the file list from `npm pack --dry-run` before using its tarball.
 
 Publishing is not part of these scripts. Before a release, check the package name, repository metadata
 and version. Publish `xsd-faker-locales` first: `xsd-faker` depends on it, and its install fails until a matching

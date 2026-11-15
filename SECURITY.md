@@ -30,10 +30,12 @@ A schema set is limited to 4 MiB per file, 16 MiB in total and 128 documents by 
 (`maxFileBytes`, `maxTotalBytes`, `maxDocuments`; CLI `--max-file-bytes`, `--max-total-bytes`,
 `--max-documents`) overrides these defaults. Each limit must be a positive safe integer; unlimited values are not
 supported. `limits` must be a plain object. The file reader counts the bytes of the file and checks its size before
-reading; a text from the in-memory API counts its UTF-8 bytes. `maxFileBytes` applies to each file once;
-each further parse copy of a chameleon document counts as a document and with its bytes against
-`maxTotalBytes` again. An exceeded limit is a `resource-limit` error naming the
-effective value. Generated instances default to 10,000 elements and a hard depth of 64. Optional
+reading; text from the in-memory API is measured in UTF-8 bytes. `maxFileBytes` applies to each file once.
+A chameleon schema is parsed separately for each namespace into which it is included; each copy counts
+toward `maxDocuments`, and its bytes count toward `maxTotalBytes`. Exceeding a limit produces a
+`resource-limit` error naming the effective value.
+
+Generated instances default to a limit of 10,000 elements and a hard depth of 64. Optional
 expansion has a separate depth limit and consumes the same node budget. XML validation may use up to
 2 GiB of WebAssembly memory. Excessive content is an error, not permission to omit it.
 Pattern generation also has work and output limits. These limits restrict allocations; they are not a

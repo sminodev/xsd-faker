@@ -131,9 +131,11 @@ The CLI uses the same generation defaults. Its differently named flags map as fo
 
 The manifest records the generation options as given; `locale` appears in it only when `--locale` is set.
 
-`values` replaces the locale; `samples` is tried before either source. To compose more sources, use
-`firstOf`. `referenceDate` only affects a locale. `coverage: true`
-uses its own choice strategy and overrides `choice`; decisions fixed by `reach` stay fixed. CLI JSON settings have no effect with `--format xml`.
+`values` replaces the locale; `samples` is tried before either source. Use `firstOf` to compose additional
+sources. `referenceDate` affects only locale-generated values.
+
+In batch generation, `coverage: true` uses its own choice strategy and overrides `choice`; decisions fixed
+by `reach` stay fixed. CLI JSON settings have no effect with `--format xml`.
 
 ## Errors
 
@@ -196,10 +198,10 @@ Inspect `status`, `errors` and `problems` before using a result:
 `valid` is the XML validator's boolean verdict, or `undefined` when not run. Use `status`, not just the
 presence of `xml`, as the generation result. `valid` can be true while `status` is `incomplete`,
 for example when an unresolved value happens to leave a schema-valid empty string. Operational validator
-failures reject the promise instead
-of being returned as a successful sample. A custom validator must return an array with one explicit verdict per
-input, each with a boolean `valid` and `errors` as an array of strings. Any other answer rejects with a `TypeError`,
-for single and batch generation and for invalid samples alike.
+failures reject the promise. A custom validator must return an array with exactly one verdict per
+input document, in the same order. Each verdict must have a boolean `valid` and an `errors` array of strings.
+Neither array may have missing entries. A malformed result rejects the call with `TypeError` in single
+generation, batch generation and invalid sample generation.
 
 `jsonStatus` is `generated`, `unavailable` or `not-requested`. A JSON collision does not make otherwise
 valid XML invalid: it makes the compact JSON unavailable. The CLI refuses a request for JSON or paired
@@ -303,10 +305,11 @@ appear in any sample.
 
 ## Paths
 
-`reach` takes paths the document has to contain. Along each path, the generator takes the optional elements that
-lead to it, the branch of each choice, the member of a substitution group and the `xsi:type` alternative that
-lead to the next step, and as many occurrences as its position asks for. An optional attribute at the end of a
-path is written. Elsewhere `optional*`, `choice` and `repeat` decide as usual:
+`reach` requests paths in the generated document. Along each path, the generator includes the necessary
+optional elements, selects the choice branches, substitution-group members and `xsi:type` alternatives
+that lead to the next step, and generates enough occurrences to reach the requested position. It also
+includes an optional attribute named in the final step. Elsewhere, `optional*`, `choice` and `repeat`
+apply as usual:
 
 ```js
 const sample = await generateSampleFile('examples/retail/order.xsd', {

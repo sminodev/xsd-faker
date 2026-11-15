@@ -2,8 +2,9 @@
 
 Generate XML and JSON test fixtures from XML Schema 1.0.
 
-Give it an entry XSD and a root element. It follows local imports and includes, builds an instance tree,
-chooses values from the schema's constraints, and checks the XML with libxml2. XML and JSON output come
+Give it an entry XSD; if the entry declares several root elements, select one explicitly. It follows local
+imports and includes, builds an instance tree, chooses values from the schema's constraints, and checks
+the XML with libxml2. XML and JSON output come
 from the same tree, so a paired fixture contains the same generated values.
 
 Use it for tests and integration examples. It covers a documented XSD subset, not every
@@ -130,8 +131,9 @@ on generated declarations take precedence. For more control, supply a `ValueSour
 
 The default compact form uses local names as property names, typed numbers and booleans, arrays for
 repeatable elements and list values, arrays of objects for repeating groups, and `value` for complex
-types with simple content. Nil elements are `null`, and an element with `xsi:type` names its type in
-`#type`. Wildcard content and elements of `xs:anyType` are mapped without the schema.
+types with simple content. Nil elements are `null`, or an object with attributes and `value: null`.
+An element with `xsi:type` names its type in `#type`. Wildcard content and elements of `xs:anyType`
+without `xsi:type` are mapped without the schema.
 
 Names that collide in the content model use qualified keys: `{namespace}local` for elements from several
 namespaces, `@local` for an attribute named like an element. The text property is reserved in every object. `INF`,

@@ -59,7 +59,7 @@ function localInput(entryFile: string, access: FileAccessOptions): GenerateInput
   return {
     entry: relative(base, entry).split(sep).join('/'),
     files(path) {
-      // A file URI or an absolute path names a place outside the boundary; other URIs are simply not fetched.
+      // Require relative local paths so every reference goes through the boundary checks below; URIs are not fetched.
       if (/^file:/i.test(path) || isAbsolute(path)) {
         throw new UnsafeLocationError('only relative local schema locations are allowed');
       }

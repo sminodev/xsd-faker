@@ -60,8 +60,9 @@ export function parseExpandedPath(text: string): ExpandedPath {
 }
 
 /**
- * The text form of a path: namespaces in braces, `{}` for none, positions from 2. Reading it gives the path back;
- * a path that has no such form, such as a namespace with a brace, throws a TypeError.
+ * Formats a path with namespaces in braces, `{}` for no namespace and bare names for any namespace.
+ * Positions are written only from 2 onward. Parsing the result preserves the path's meaning.
+ * Throws a TypeError if the path cannot be represented, for example if a namespace contains a brace.
  */
 export function formatExpandedPath(path: ExpandedPath): string {
   if (!Array.isArray(path) || path.length === 0) throw new TypeError('a path names at least one element');

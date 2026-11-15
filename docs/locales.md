@@ -13,22 +13,6 @@ const sample = await generateSampleFile('order.xsd', { locale: 'de', seed: 7 });
 On the command line, use `--locale de`. The built-in locales are `de` and `en`. A tag with a region falls
 back along its subtags, so `de-CH` uses `de`.
 
-## From profiles to locales
-
-Locales replace the profiles of earlier versions. The option `profile` (`generic`, `retail`, `insurance`,
-`logistics`), the CLI option `--profile`, `profileValues` and `PROFILE_NAMES` are gone. A call that still passes
-`profile` fails with a `TypeError` directing callers to `locale`; `--profile` exits with code 1:
-
-| Before                                              | Now                                           |
-| --------------------------------------------------- | --------------------------------------------- |
-| `{ profile: 'retail', locale: 'de' }`               | `{ locale: 'de' }`                            |
-| `--profile insurance --locale de --date 2026-01-15` | `--locale de --date 2026-01-15`               |
-| `profileValues('retail', { locale: 'de' })`         | `localeValues('de')`                          |
-| fixed product names or codes of a profile           | `samples` or `--values`, by path or type name |
-
-Locales recognize fields by name across domains. Domain-specific values formerly supplied by a profile,
-such as product names, belong in `samples`.
-
 ## Where values come from
 
 Values are selected in this order:
@@ -96,30 +80,29 @@ const sample = await generateSampleFile('order.xsd', {
 
 ## People and addresses
 
-The name fields of one element belong to one person, and its address fields to one place: in
-`<Customer><FirstName/><LastName/><Gender/><Email/></Customer>`, the gender fits the first name and the
-e-mail address is made from both names. Salutation and name suffix follow the gender too, `Freifrau` for a
-woman and `Freiherr` for a man; a neutral form suits everyone. A neutral person takes only neutral
-salutations and name suffixes; where the locale has none, as `de`, those fields get facet values. City,
-postcode and state come from the same entry of the locale.
+The name fields within one element share a person record, and its address fields share an address record.
+In `<Customer><FirstName/><LastName/><Gender/><Email/></Customer>`, the first name matches the generated
+gender and the e-mail address uses both names. Salutations and name suffixes also follow that gender;
+neutral forms can be used for any gender. A neutral person receives only neutral salutations and suffixes.
+If the locale has none, as with `de`, those fields fall back to facet generation. City, postcode and state
+come from the same place in the locale data.
 
-A record also serves the parent of the element that holds its fields: in
-`<Person><Name><FirstName/><LastName/></Name><Gender/></Person>`, the gender fits the first name inside
-`Name`. Elements beside each other get records of their own, so `Buyer/Name` and `Seller/Name` are two
-people, and so does each occurrence of a repeated element and each element of a choice branch. A further
-occurrence of a field in the same element, such as the second of three first names, takes another entry of
-the same list if an unused entry is available.
+A nested record can also serve its parent. In
+`<Person><Name><FirstName/><LastName/></Name><Gender/></Person>`, the parent's gender matches the first
+name inside `Name`. Sibling elements such as `Buyer/Name` and `Seller/Name` receive separate records,
+as do repeated occurrences and elements in choice branches. A repeated field within one record, such as
+the second of three first names, uses another entry from the same list if an unused entry is available.
 
-A record value that fails the facets of its field, such as a last name longer than `maxLength`, is replaced
-for that field only: by another entry of the locale's list that fits, and otherwise by a facet value. The
-other fields keep the record. An empty list never gives a value; the field gets a facet value instead. A
-gender with an enumeration takes the code it spells for that gender, such as `w`, `m`, `d` or `F`, `M`,
-`X`.
+If a record value fails its field's facets, only that field is replaced. The generator first tries another
+entry from the locale list, then falls back to facet generation. The other fields keep their record values.
+An empty list also causes a fallback. For a gender field with an enumeration, the generator uses a matching
+code such as `w`, `m`, `d` or `F`, `M`, `X`.
 
 ## Dates
 
-Dates are relative to `referenceDate`, an ISO date or timestamp; a timestamp without a time zone, such as
-`2026-01-15T00:30:00`, is read as UTC, so the machine's time zone does not change the values. Birth dates are one to ninety years earlier. End, expiry and due
+Dates are relative to `referenceDate`, an ISO date or timestamp. A timestamp without a time zone, such as
+`2026-01-15T00:30:00`, is interpreted as UTC, so results do not depend on the machine's time zone.
+Birth dates are one to ninety years earlier. End, expiry and due
 dates are up to two years later; other dates are up to two years earlier. Words such as `Ende`, `Ablauf`,
 `bis`, `end`, `until` or `expiry` identify future dates even without `datum` or `date` in the name:
 `GueltigBis`, `Leistungsende` and `validUntil` produce future dates for both built-in date types and
@@ -161,13 +144,13 @@ Where a document must hold agreed test numbers, list them in `samples` by path o
 
 ## Free text
 
-A string without pattern or enumeration that matches no other field gets free text in the locale's words,
-unless its name says it holds a number, a code, a key or an ID, such as `Kundennummer`,
-`Tarifschluessel` or `orderId`; those keep facet values. Up to 40 characters it is a word group without a
-period, such as `Hinterhaus links`; beyond, it is sentences. A phrase or sentence of the locale is used as
-it is where it fits the length facets; otherwise words are joined to the exact length, with single spaces
-and none at either end, so the length holds under every `whiteSpace` rule. Free text is capped at
-160 characters unless `minLength` requires more, even if `maxLength` allows it.
+A string without a pattern or enumeration receives free text when no other field matches. Names that
+indicate a number, code, key or ID, such as `Kundennummer`, `Tarifschluessel` or `orderId`, keep facet-generated
+values. Text up to 40 characters uses a phrase without a period, such as `Hinterhaus links`; longer text uses
+sentences. Existing phrases or sentences are used when they fit the length facets. Otherwise, words are
+joined to the requested length with single spaces and no leading or trailing space, preserving the length
+under every `whiteSpace` rule. Free text is capped at 160 characters unless `minLength` requires more,
+even if `maxLength` allows it.
 
 ## Domain values
 
@@ -189,10 +172,10 @@ starting with `/` a path. A type key also applies to restrictions of that type, 
 
 ## Adding a locale
 
-Import locale helpers and types from `xsd-faker`: `defineLocale`, `extendLocale`, `localeFromFaker`, the
-built-in locales `de` and `en`, `LOCALES` by tag and the types. The data lives in the package
-`xsd-faker-locales`, which is installed with xsd-faker; import from it directly only in a tool that uses the
-data without xsd-faker.
+Import locale helpers and types from `xsd-faker`. It exports `defineLocale`, `extendLocale`, `localeFromFaker`,
+the built-in locales `de` and `en`, the `LOCALES` lookup by tag, and types such as `LocaleData`.
+The data lives in `xsd-faker-locales`, which is installed with xsd-faker. Tools that use only the locale data
+can depend on that package directly.
 
 A locale is plain data in the shape of `LocaleData`: `person`, `address`, `contact` and `text`.
 `defineLocale(tag, data)` checks the data and
@@ -291,3 +274,19 @@ const sample = await generateSampleFile('order.xsd', { locale });
 
 The data then comes from your faker-js installation and follows its license. A seed reproduces a document
 only with the same faker-js version.
+
+## From profiles to locales
+
+When upgrading code that uses profiles, replace `profile` and `--profile` with locale settings and value
+lists. The API rejects `profile` with a `TypeError` directing callers to `locale`; the CLI rejects
+`--profile` with exit code 1. The former exports `profileValues` and `PROFILE_NAMES` are unavailable.
+
+| Profile-based call or value                         | Replacement                                   |
+| --------------------------------------------------- | --------------------------------------------- |
+| `{ profile: 'retail', locale: 'de' }`               | `{ locale: 'de' }`                            |
+| `--profile insurance --locale de --date 2026-01-15` | `--locale de --date 2026-01-15`               |
+| `profileValues('retail', { locale: 'de' })`         | `localeValues('de')`                          |
+| fixed product names or codes of a profile           | `samples` or `--values`, by path or type name |
+
+This applies to the former `generic`, `retail`, `insurance` and `logistics` profiles. Locales recognize
+fields by name across domains; supply domain-specific values, such as product names, through `samples`.

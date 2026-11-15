@@ -9,15 +9,15 @@ Instance mode chooses one particle per occurrence of `xs:choice`, respects occur
 validates the XML. Repeated choice groups can select a branch on each occurrence; a choice does not
 necessarily mean that only one branch name can appear anywhere in the document.
 
-Substitution groups and `xsi:type` are decided the same way. Where a particle refers to the head of a
-substitution group, each occurrence chooses among the head, unless it is abstract, and the members that
-may replace it, also members of members. Where an element has a named complex type, it chooses among
-that type, unless it is abstract, and the named complex types derived from it, by extension or
-restriction; a type other than the declared one is written as `xsi:type` with a declared prefix.
+Substitution groups and `xsi:type` use the same selection strategy. For a particle that refers to a
+substitution-group head, each occurrence selects the head or an allowed member, including members reached
+through other members. For an element with a named complex type, it selects that type or an allowed named
+complex type derived by extension or restriction. Abstract declarations and types are excluded from these
+selections. A type other than the declared one is written as `xsi:type` with a declared prefix.
 `block` on the element, on the head or the declared type and `blockDefault` exclude alternatives, as do
 `block` on intermediate types for substitution groups and `final` on the head, following XML Schema 1.0.
-Abstract elements and types are never written themselves. The choice strategy, coverage and
-`smallest` treat these alternatives like branches. An element of a simple type keeps its declared type:
+The choice strategy, coverage and `smallest` treat these alternatives like branches.
+An element of a simple type keeps its declared type:
 choosing among the many built-in and schema types derived from it is outside the generator's scope.
 
 In a template, every member of a substitution group is written; an element still has one type.
@@ -42,11 +42,11 @@ Optional inclusion is a separate decision:
 | `optional: 'all'`            | Required and optional elements and attributes                  |
 | `optional: 'random'`         | Required content plus optional content selected using the seed |
 
-`nil` decides separately whether an element that occurs is written as nil: `'never'` (default) never does
-and draws no random numbers, so it does not affect what a seed produces otherwise; `'random'` makes each
-occurrence of a nillable element without a `fixed` value nil with chance one half. A nil element keeps
-the attributes its type declares, required ones included, and has no content. `choice: 'smallest'` does
-not count nil.
+`nil` separately controls whether an included element is written with `xsi:nil="true"`. The default,
+`'never'`, draws no random numbers and therefore leaves the random sequence for other decisions unchanged.
+With `'random'`, each occurrence of a nillable element without a `fixed` value has a one-half chance of being
+nil. A nil element has no content but keeps the attributes selected from its type, including required ones.
+The size estimate used by `choice: 'smallest'` does not account for nil.
 
 `optionalElements` and `optionalAttributes` override the shorthand independently. An omitted optional
 element also omits its entire subtree. Included optional elements use the same `repeat` rule as required
@@ -61,6 +61,7 @@ from `maxDepth` on. The [API reference](api.md#options) gives the weights.
 
 `maxDepth` stops optional expansion and must be lower than `maxTotalDepth`. Required descendants of an
 included element remain required.
+Paths requested with `reach` can include optional elements beyond `maxDepth`; the hard limits still apply.
 `maxTotalDepth` (CLI: `--max-depth`) and `maxNodes` (`--max-nodes`) are hard limits:
 
 - Exceeding `maxTotalDepth` returns `incomplete` with a `depth-limit` error.
@@ -77,14 +78,14 @@ it off. Use a terminating choice strategy or fix the schema when appropriate.
 Generated declarations use their `fixed` or `default` value first. Without one, a value list, a locale or
 a custom source can supply candidates. The facet generator handles supported enums, patterns, ranges,
 lengths, lists and unions. It tries a bounded number of candidates; failure produces a diagnostic.
-Generated values are written after the type's whiteSpace rule, as a validator reads them, so XML and JSON
-carry the same value. A `fixed`, `default` or supplied value keeps its spelling in XML; JSON gets it as the
-validator reads it, see [output](output.md#compact-json).
+Facet-generated values are normalized using the type's `whiteSpace` rule before they are written.
+A `fixed`, `default` or supplied value keeps its spelling in XML; compact JSON uses its normalized value.
+Tree JSON preserves the lexical value as well. See [JSON output](output.md) for the conversion rules.
 
-A prefix in a QName value means what the schema binds it to. A generated value, from a pattern for example, may
-use a prefix the schema does not bind; such a prefix is declared with the namespace `urn:example:prefix:` and the
-prefix appended, `xsi` with the XML Schema instance namespace. The prefix `xmlns` cannot be declared and is never
-generated.
+A QName value uses the namespace that the schema binds to its prefix. A generated value, for example from
+a pattern, may contain an unbound prefix. The generator declares it as `urn:example:prefix:` followed by
+the prefix, except that `xsi` uses the XML Schema instance namespace. The prefix `xmlns` cannot be declared
+and is never generated.
 
 Pattern generation draws from printable ASCII (`U+0020` to `U+007E`) and literal characters or ranges
 written in the pattern, such as `[ä-ü]`. The name types (`Name`, `NCName`, `NMTOKEN`, `QName`, `ID`,
@@ -103,9 +104,9 @@ more when narrow bounds need them. Numeric parsing is bounded to 1000 digits and
 `-INF` and `NaN` are not generated at random. A bound that overflows the type, such as `1e39` for
 `xs:float`, is evaluated as infinity and can require an `INF` or `-INF` value. Fixed or enumerated values
 are written as given and checked against the bounds of XML Schema 1.0, where every bound excludes `NaN`. `INF`, `-INF`
-and `NaN` as bounds themselves are reported as `unsupported`. A union picks its member with the seed and
-writes a value of that member, so in a union of `xs:decimal` and `xs:double` the double member is chosen,
-but its values look like decimals and the first member accepts them as well.
+and `NaN` as bounds themselves are reported as `unsupported`. A union selects a member using the seed and
+generates a value for it. In a union of `xs:decimal` and `xs:double`, for example, a finite value generated
+for the double member can also be accepted by the decimal member because it uses plain decimal notation.
 
 The default facet generator is seeded. Locale dates count from an explicit reference date, fixed by
 default. For unsupported temporal bounds, a locale falls back to seeded facet candidates (years

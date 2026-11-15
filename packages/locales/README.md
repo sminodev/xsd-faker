@@ -1,6 +1,6 @@
 # xsd-faker-locales
 
-Locale data for [xsd-faker](../../README.md): first and last names, titles, name prefixes and suffixes,
+Locale data for [xsd-faker](https://github.com/sminodev/xsd-faker#readme): first and last names, titles, name prefixes and suffixes,
 streets, cities with their postcodes, phone number patterns, e-mail domains and common words, for German
 (`de`) and English with US addresses (`en`). The package provides data and helpers for defining locales.
 xsd-faker maps schema fields to locale values.
@@ -38,7 +38,7 @@ const office = extendLocale(en, { person: { title: ['Dr.', 'Prof.', 'Rev.'] } })
 
 `defineLocale` validates the data and throws a `TypeError` identifying the first invalid field. The types
 `LocaleData`, `PersonData`, `AddressData`, `ContactData` and `TextData` describe the shape; the
-[locale guide](../../docs/locales.md#adding-a-locale) lists every field.
+[locale guide](https://github.com/sminodev/xsd-faker/blob/main/docs/locales.md#adding-a-locale) lists every field.
 
 `localeFromFaker(definition)` converts locale data from your own faker-js installation;
 this package does not depend on faker-js.

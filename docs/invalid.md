@@ -19,10 +19,10 @@ for (const sample of matrix.samples.filter((s) => s.status === 'confirmed')) {
 console.log(matrix.counts);
 ```
 
-The valid samples come from the usual options, `count`, `coverage`, `seed`, `reach` and the others. Optional
-elements and attributes default to `all` to expose more rules for mutation; set them to `none` for
-changes to required content only. Where all optional elements of a large schema exceed `maxNodes`, the default
-falls back to `none` for elements.
+The generator first creates valid samples using `count`, `coverage`, `seed`, `reach` and the other generation
+options. Optional elements and attributes default to `all` to expose more rules for mutation; set them to
+`none` to generate only required content. If including all optional elements exceeds `maxNodes`, generation
+retries with `optionalElements: 'none'`, unless you explicitly chose an optional-element setting.
 
 ## Rules
 
@@ -48,30 +48,33 @@ falls back to `none` for elements.
 `RULES` lists them in this order, which is also the order of the samples. Content admitted by a wildcard is not
 changed by the matrix.
 
-A declaration with a fixed value has only the rule `value:fixed`, and a type with an enumeration only
-`facet:enumeration`: any other value breaks those first. The identity rules leave such values alone as well.
-libxml2 compares a fixed value on an element as text and rejects `+5` for `5`; XML Schema compares values and
-accepts it, so the matrix never writes such a value. Length facets of an `xs:list` count its items. Bounds of
-`xs:date`, `xs:dateTime`, `xs:time`, `xs:gYear` and `xs:gYearMonth` are compared as XML Schema orders these
-values: a value without time zone and a bound with one, less than 14 hours apart, have no order, and such a value
-counts as breaking the bound. The bounds of `xs:duration`, `xs:gMonth`, `xs:gMonthDay` and `xs:gDay` are not
-compared here; for such a type only `value:lexical` is constructed.
+A declaration with a fixed value uses only `value:fixed` for value mutations. For a type with an enumeration,
+only `facet:enumeration` is used: a value outside the allowed set would break that constraint as well as any
+targeted facet. Identity mutations also leave fixed and enumerated values unchanged.
 
-A value can be impossible to construct. For example, every value of `[0-9]{9}` has nine characters, so with
-`length="9"` no value breaks the length and still matches the pattern. Likewise, within the bounds `-999` to `999`
-no integer has more than three digits, and an enumeration allows only its values: unless one of them breaks
-another facet, every other value breaks the enumeration as well. Such cases are counted as not constructible,
-with the reason, and not generated. So are changes that would break a second rule the validator does not see,
-such as a changed ID that a reference names.
+Fixed values are compared by value. For example, `+5` and `5` represent the same integer, so the matrix does
+not use one to violate the other, even though libxml2 rejects the different spelling on an element.
+Length facets of an `xs:list` count items.
+
+Bounds of `xs:date`, `xs:dateTime`, `xs:time`, `xs:gYear` and `xs:gYearMonth` use XML Schema's ordering.
+A value without a time zone and a bound with one have no defined order when they are less than 14 hours
+apart; such a value counts as breaking the bound. The matrix does not compare bounds of `xs:duration`,
+`xs:gMonth`, `xs:gMonthDay` or `xs:gDay`; for those types it constructs only `value:lexical` mutations.
+
+A value that breaks exactly one rule may be impossible to construct. Every value matching `[0-9]{9}` has
+nine characters, so no value can break `length="9"` while keeping that pattern. Likewise, an integer between
+`-999` and `999` cannot violate `totalDigits="3"`. These cases are reported as not constructible, with a reason.
+The matrix also excludes changes that would break a second rule the validator does not detect, such as
+changing an ID that another node references.
 
 ## Status
 
-| Status          | Meaning                                                                                                                                                        |
-| --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `confirmed`     | the validator rejects the document, every message fits the change, and one of them states the rule                                                             |
-| `other-cause`   | the validator rejects it, but a message points to another rule, element or value, or none states the rule; or the ID check of the document finds another cause |
-| `accepted`      | the validator accepts it: the change did not break the schema as expected                                                                                      |
-| `not-checkable` | the validator cannot decide it: a message the classifier cannot read, or a rejection without a message                                                         |
+| Status          | Meaning                                                                                                                                                                            |
+| --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `confirmed`     | the intended violation is confirmed by matching validation diagnostics or, for dangling ID references, by the separate integrity check                                             |
+| `other-cause`   | the validator rejects it, but a message points to another rule, element or value, or none states the rule; or the ID check of the document finds another cause                     |
+| `accepted`      | the validator accepts the document and, for dangling ID references, the integrity check finds no violation                                                                         |
+| `not-checkable` | the intended violation cannot be confirmed because diagnostics are missing or unrecognized, a required integrity check is absent, or the validator has a known checking limitation |
 
 A diagnostic alone does not identify the violated rule. libxml2 reports a missing `A` before `B` as
 `Element 'B': This element is not expected. Expected is ( A ).` The same wording can indicate an extra
@@ -82,9 +85,9 @@ constraint without a value or an abstract declared type must accompany a diagnos
 on their own they are `other-cause`. A value outside the lexical space of a union is the exception: libxml2
 reports only the message about the whole value, and that message states the rule.
 
-libxml2 does not resolve references. So every changed document also goes through the ID check of the generator:
-`identity:dangling-idref` is confirmed by it, and the validator has to accept the document; for every other rule,
-a finding of the ID check is a second cause.
+libxml2 does not resolve ID references, so the generator also checks IDs and references in every changed
+document. This check confirms `identity:dangling-idref` only when the validator accepts the rest of the
+document. For every other rule, an ID-check finding counts as a second cause.
 
 ## Limits
 
@@ -100,11 +103,14 @@ left out by the limits and never tried. All documents are validated against one 
 
 ## The result
 
-`matrix.samples` holds every applied change with `rule`, `path`, `facet` and `value` where they apply, `status`,
-`diagnostics` (the messages with their line), `reason`, `seed` (of the valid sample it came from), `xml` and
-`tree`. `matrix.notConstructible` lists rule, path, reason and whether the reason is `decided` or the search found
-nothing. `matrix.counts` counts each status and the changes that were not constructible, and `bases` the valid
-samples the changes start from.
+`matrix.samples` contains every applied change, including unconfirmed ones. Each entry records its `rule`,
+`path`, `status`, `diagnostics`, `seed`, `xml` and `tree`, plus `facet`, `value` and `reason` where applicable.
+Diagnostics include line numbers where available; the seed identifies the valid sample used as the base.
+
+`matrix.notConstructible` lists changes that could not be made, with their rule, path and reason.
+`decided: true` means the change is impossible; `false` means the search found no suitable value or could
+not compare the constraints. `matrix.counts` summarizes these outcomes and each sample status.
+`matrix.bases` counts the valid samples from which the changes were made.
 
 The CLI writes the confirmed samples as `0001-facet-pattern.xml` and so on, and `manifest.json` with every sample:
 `number`, `file` (`null` for one not written), `rule`, `path`, `facet`, `value`, `expected` (`invalid`), `status`,
@@ -119,13 +125,15 @@ They work on the instance tree and on plain data, without the schema.
 
 ### Paths
 
-A path names a node of the tree by expanded names: `/{urn:example:order}Order/{urn:example:order}Line[2]/@{}id`.
-`{ns}local` is that namespace, `{}local` no namespace, and a name without braces matches any namespace, as the paths
-of `samples` do. Positions count elements of that name among their siblings, from 1. `parseExpandedPath` reads
-the text form into steps `{ ns?, name, position?, attribute? }`; `formatExpandedPath` writes the exact form,
-always with braces and with positions from 2, which reads back to the same path. A path that has no such form,
-such as a namespace with a brace, throws a `TypeError`; so does text that is not a path. The option `reach` and
-the manifest use this form.
+A path identifies a tree node, for example `/{urn:example:order}Order/{urn:example:order}Line[2]/@{}id`.
+`{ns}local` selects a namespace, `{}local` selects no namespace, and a bare name matches any namespace, as
+in `samples` paths. Positions count matching siblings from 1; `@` marks an attribute in the final step.
+
+`parseExpandedPath` reads the text into steps `{ ns?, name, position?, attribute? }`. `formatExpandedPath`
+writes explicit namespaces in braces and leaves names bare when `ns` is absent. It omits position 1 and
+writes positions from 2 onward. Parsing that output preserves the path's meaning. Invalid path text or a
+path that cannot be represented, such as a namespace containing a brace, throws `TypeError`.
+The `reach` option and the manifest use this notation.
 
 ### Values
 
@@ -145,17 +153,21 @@ the manifest use this form.
 | `whiteSpace`                       | the effective rule; without it, the rule of the built-in type                               |
 | `fixed`                            | the fixed value of the element or attribute declaration                                     |
 
-The value breaks `rule` of `facets` and meets every other facet, and all facets of `mustSatisfy` too: a value
-that a type of one version accepts and another rejects, also where the versions differ in the built-in type, such
-as `int` and `integer`. Values are compared in the value space, as for an enumeration: `0a` is the `hexBinary`
-`0A`. `decided: true` comes with a proof that no such value exists; `false` means the search found none, or the
-facets cannot be compared, such as the bounds of an `xs:duration`. `INF` and `-INF` bound a `float` or `double`
-like any other value. Values of `xs:QName` and `xs:NOTATION` need namespace bindings and are not constructed.
+A constructed value breaks `rule` while meeting every other facet in `facets`. If `mustSatisfy` is supplied,
+it must meet those constraints too. This lets you find a value that one schema version accepts and another
+rejects, including when their built-in types differ, such as `int` and `integer`. Comparisons use values
+rather than spellings: `0a` and `0A` are the same `hexBinary` value.
+
+For a result with status `not-constructible`, `decided: true` means no such value exists. `false` means the
+search found none or could not compare the facets, such as bounds of `xs:duration`. `INF` and `-INF` are
+supported bounds for `float` and `double`. Values of `xs:QName` and `xs:NOTATION` need namespace bindings
+and are not constructed.
 
 ### Changes to a tree
 
 `applyTreeMutation(tree, mutation)` applies one change to a copy of the tree and returns `{ status: 'applied',
-tree, path, context, lines }` or `{ status: 'not-applicable', reason }`; it does not throw. The changes are
+tree, path, context, lines }`. If the mutation cannot be applied, it returns `{ status: 'not-applicable', reason }`.
+The supported operations are
 `set-value`, `remove`, `repeat` (`times` copies after the element), `swap-next` (with the element right after it,
 which must have another name), `insert` (an element after `after`, or as the last child of `into`),
 `add-attribute`, `set-nil` and `set-xsi-type`, each with the `rule` it aims at. `context` names the elements
@@ -169,8 +181,8 @@ copy, as `serializeXml` writes the changed tree with its default layout.
 `parseDiagnostic` parses individual messages. `integrity` contains ID-check findings, which confirm
 `identity:dangling-idref` but count as another cause for other rules. `validateXml` returns diagnostic
 line numbers in `lines`; the classifier compares them with `applied.lines`.
-A document written in another layout than the default needs those lines for that layout; where `verdict.lines` is
-missing, messages are tied to the change by name and value only.
+If you serialize the document with a different layout, `applied.lines` must match that layout. Without
+`verdict.lines`, the classifier can associate messages with the change only by name and value.
 
 ### Namespaces
 
